@@ -1,0 +1,105 @@
+"use server";
+
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { audit, createSession, destroySession, getCurrentUser, roleForEmail } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { hashPassword, passwordIssues, verifyPassword } from "@/lib/password";
+import { clientKey, rateLimit } from "@/lib/rate-limit";
+import { isEmail } from "@/lib/validate";
+import { newId, nowIso } from "@/lib/util";
+import type { User } from "@/lib/types";
+
+export interface AuthFormState {
+  error?: string;
+  fieldErrors?: Record<string, string>;
+}
+
+async function requestMeta(): Promise<{ userAgent: string | null; ip: string | null }> {
+  const h = await headers();
+  const forwarded = h.get("x-forwarded-for");
+  return {
+    userAgent: h.get("user-agent"),
+    ip: forwarded ? forwarded.split(",")[0].trim() : h.get("x-real-ip"),
+  };
+}
+
+export async function registerAction(
+  _prev: AuthFormState,
+  formData: FormData,
+): Promise<AuthFormState> {
+  const name = String(formData.get("name") ?? "").trim();
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const company = String(formData.get("company") ?? "").trim();
+  const password = String(formData.get("password") ?? "");
+
+  const meta = await requestMeta();
+  const limit = rateLimit(clientKey(["register", meta.ip]), 5, 15 * 60_000);
+  if (!limit.ok) {
+    return { error: "Too many attempts. Try again in a few minutes." };
+  }
+
+  const fieldErrors: Record<string, string> = {};
+  if (name.length < 2) fieldErrors.name = "Enter your full name.";
+  if (!isEmail(email)) fieldErrors.email = "Enter a valid work email address.";
+  const issues = passwordIssues(password);
+  if (issues.length > 0) fieldErrors.password = `Password ${issues.join(", ")}.`;
+
+  if (Object.keys(fieldErrors).length > 0) return { fieldErrors };
+
+  const db = getDb();
+  const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+  if (existing) return { fieldErrors: { email: "An account with that email already exists." } };
+
+  const id = newId("usr");
+  db.prepare(
+    `INSERT INTO users (id, email, name, company, password_hash, role, plan, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'free', ?, ?)`,
+  ).run(
+    id,
+    email,
+    name,
+    company || null,
+    hashPassword(password),
+    roleForEmail(email),
+    nowIso(),
+    nowIso(),
+  );
+
+  await createSession(id, { remember: formData.get("remember") === "on", ...meta });
+  audit(id, "user.registered", { email });
+
+  redirect("/dashboard");
+}
+
+export async function loginAction(_prev: AuthFormState, formData: FormData): Promise<AuthFormState> {
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const password = String(formData.get("password") ?? "");
+
+  const meta = await requestMeta();
+  const limit = rateLimit(clientKey(["login", meta.ip]), 10, 10 * 60_000);
+  if (!limit.ok) return { error: "Too many sign-in attempts. Try again shortly." };
+
+  if (!isEmail(email) || password.length === 0) {
+    return { error: "Enter your email and password." };
+  }
+
+  const user = getDb().prepare("SELECT * FROM users WHERE email = ?").get(email) as User | undefined;
+
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    audit(user?.id ?? null, "user.login_failed", { email });
+    return { error: "Those credentials are not valid." };
+  }
+
+  await createSession(user.id, { remember: formData.get("remember") === "on", ...meta });
+  audit(user.id, "user.login", { email });
+
+  redirect("/dashboard");
+}
+
+export async function logoutAction(): Promise<void> {
+  const user = await getCurrentUser();
+  if (user) audit(user.id, "user.logout", { email: user.email });
+  await destroySession();
+  redirect("/");
+}
