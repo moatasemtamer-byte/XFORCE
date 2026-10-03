@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\TriconexToTia.Core\TriconexToTia.Core.csproj" />
+    <ProjectReference Include="..\TriconexToTia.Parser\TriconexToTia.Parser.csproj" />
+    <ProjectReference Include="..\TriconexToTia.Mapper\TriconexToTia.Mapper.csproj" />
+    <ProjectReference Include="..\TriconexToTia.Generators\TriconexToTia.Generators.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

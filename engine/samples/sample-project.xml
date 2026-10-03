@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project name="DemoProject">
+  <DataTypes>
+    <DataType name="PumpData" kind="STRUCT">
+      <Member name="Speed" type="REAL" />
+      <Member name="Running" type="BOOL" />
+      <Member name="StartTime" type="TIME_OF_DAY" />
+    </DataType>
+  </DataTypes>
+  <FunctionBlocks>
+    <FunctionBlock name="PumpCtrl" language="ST">
+      <Variables>
+        <Variable name="Start" type="BOOL" direction="IN" comment="Start command" />
+        <Variable name="Running" type="BOOL" direction="OUT" />
+        <Variable name="Fault" type="BOOL" direction="IN_OUT" />
+        <Variable name="Timer1" type="TON" />
+      </Variables>
+      <Code><![CDATA[
+IF Start THEN
+  Running := TRUE;
+  Timer1(IN := TRUE, PT := T#5S);
+ELSE
+  Running := FALSE;
+END_IF;
+]]></Code>
+    </FunctionBlock>
+  </FunctionBlocks>
+  <Functions>
+    <Function name="CalcFlow" language="ST" returnType="REAL">
+      <Variables>
+        <Variable name="Area" type="REAL" direction="IN" />
+        <Variable name="Velocity" type="REAL" direction="IN" />
+        <Variable name="Temp" type="REAL" />
+      </Variables>
+      <Code><![CDATA[
+Temp := Area * Velocity;
+CalcFlow := Temp;
+]]></Code>
+    </Function>
+  </Functions>
+  <Programs>
+    <Program name="MainControl" language="ST">
+      <Variables>
+        <Variable name="Pump" type="PumpCtrl" />
+      </Variables>
+      <Code><![CDATA[
+Pump.Start := TRUE;
+Pump.Running := FALSE;
+]]></Code>
+    </Program>
+  </Programs>
+  <GlobalVariables>
+    <Variable name="GlobalCounter" type="INT" />
+    <Variable name="SensorValue" type="REAL" />
+  </GlobalVariables>
+  <IOConfiguration>
+    <IOPoint name="PumpStart" type="BOOL" direction="input" />
+    <IOPoint name="PumpRun" type="BOOL" direction="output" />
+    <IOPoint name="PumpSpeed" type="REAL" direction="input" signal="analog" />
+  </IOConfiguration>
+</Project>

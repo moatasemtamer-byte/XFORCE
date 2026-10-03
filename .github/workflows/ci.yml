@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    name: Conversion engine (.NET)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 7.0.x
+      - name: Restore
+        run: dotnet restore engine/TriconexToTia.sln
+      - name: Build
+        run: dotnet build engine/TriconexToTia.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test engine/TriconexToTia.sln --configuration Release --no-build --verbosity normal
+
+  web:
+    name: Web app (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm run build
+        env:
+          SESSION_SECRET: ci-only-not-a-real-secret
