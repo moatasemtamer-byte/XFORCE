@@ -5,7 +5,9 @@ import { useRef, useState } from "react";
 import { Button, Field, inputClass } from "@/components/ui";
 import { formatBytes } from "@/lib/util";
 
-const ACCEPT = ".sch,.lad,.xml,.edb,.txt,.csv,.pdf,.png,.jpg,.jpeg,.dwg,.dxf";
+// Keep in step with ALLOWED_EXTENSIONS in src/app/api/jobs/route.ts — these are
+// the two source formats the conversion engine can actually read.
+const ACCEPT = ".pdf,.txt,.lpt,.lst,.log,.csv,.xml";
 
 export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
   const router = useRouter();
@@ -21,7 +23,7 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
     setError(null);
 
     if (!file) {
-      setError("Choose a ladder diagram file first.");
+      setError("Choose a source file first.");
       return;
     }
     if (tooLarge) {
@@ -65,9 +67,9 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
       ) : null}
 
       <Field
-        label="Ladder diagram"
+        label="Source file"
         htmlFor="file"
-        hint={`Accepted: SCH, LAD, XML, EDB, TXT, CSV, PDF, images, DWG, DXF. Max ${formatBytes(maxUploadBytes)}.`}
+        hint={`A Triconex XML project export, a text-based ladder-logic PDF, or a raw program listing such as a Triconex TRISTATION .LPT printout. Max ${formatBytes(maxUploadBytes)}.`}
       >
         <div className="rounded-lg border border-dashed border-ink-600 bg-ink-900/60 p-5 text-center transition-colors focus-within:border-signal-500">
           <input
@@ -89,41 +91,25 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
         </div>
       </Field>
 
-      <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Target format" htmlFor="targetFormat">
-          <select id="targetFormat" name="targetFormat" defaultValue="msw" className={inputClass}>
-            <option value="msw">MSW (default)</option>
-            <option value="msw-v2">MSW v2</option>
-          </select>
-        </Field>
-
-        <Field label="Sheet name" htmlFor="sheetName" hint="Optional, passed to the engine.">
-          <input id="sheetName" name="sheetName" className={inputClass} placeholder="MOTOR_STARTERS" />
-        </Field>
-      </div>
-
-      <fieldset className="rounded-lg border border-ink-700 bg-ink-900/40 p-4">
-        <legend className="px-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-mist-500">
-          Additional outputs
-        </legend>
-        <div className="grid gap-3 sm:grid-cols-3">
+      <div className="rounded-lg border border-ink-700 bg-ink-900/40 p-4">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-mist-500">
+          Returned for every job
+        </p>
+        <ul className="mt-3 grid gap-1.5 sm:grid-cols-2">
           {[
-            ["includeRungsReport", "Rung report"],
-            ["includeNetlist", "Netlist"],
-            ["includeBom", "Bill of materials"],
-          ].map(([name, label]) => (
-            <label key={name} className="flex items-center gap-2.5 text-xs text-mist-300">
-              <input
-                type="checkbox"
-                name={name}
-                defaultChecked={name === "includeRungsReport" || name === "includeNetlist"}
-                className="h-4 w-4 rounded border-ink-500 bg-ink-800 accent-signal-500"
-              />
-              {label}
-            </label>
+            ".zip — TIA Portal import package (Blocks, UDTs, Tags, import.ps1)",
+            "Blocks/*.scl — SCL for each program, function and function block",
+            "UDTs/*.xml — SimaticML UDT definitions",
+            "Tags/*.xml — tag tables for I/O and global variables",
+            "import.ps1 — TIA Openness import script",
+            "conversion_report.txt — summary, warnings and manual actions",
+          ].map((line) => (
+            <li key={line} className="text-xs text-mist-400">
+              {line}
+            </li>
           ))}
-        </div>
-      </fieldset>
+        </ul>
+      </div>
 
       <div className="grid gap-5 sm:grid-cols-2">
         <Field label="License key" htmlFor="licenseKey" hint="Optional. Defaults to your first active key.">

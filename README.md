@@ -1,11 +1,11 @@
 # XforceMsw
 
-Ladder diagram → MSW conversion platform. Marketing site, licensing, conversion job
+Ladder diagram ΓåÆ MSW conversion platform. Marketing site, licensing, conversion job
 pipeline and an admin view, built to sit in front of an external MSW conversion engine.
 
-- **Stack** — Next.js 16 (App Router, React 19, TypeScript), Tailwind CSS 4, SQLite via `better-sqlite3`
-- **Runtime** — Node.js, single process, no external services required
-- **Engine** — your tool, called over one documented HTTP endpoint
+- **Stack** ΓÇö Next.js 16 (App Router, React 19, TypeScript), Tailwind CSS 4, SQLite via `better-sqlite3`
+- **Runtime** ΓÇö Node.js, single process, no external services required
+- **Engine** ΓÇö your tool, called over one documented HTTP endpoint
 
 ---
 
@@ -28,7 +28,7 @@ Schema is applied idempotently from `src/lib/schema.sql` on every cold start.
 
 ### Bootstrapping your first admin
 
-Register through the UI — anyone listed in `ADMIN_EMAILS` gets the admin role
+Register through the UI ΓÇö anyone listed in `ADMIN_EMAILS` gets the admin role
 automatically. To mint a session directly (local development only):
 
 ```bash
@@ -46,7 +46,7 @@ The site ships with a **stub adapter**. With no engine configured, uploads are a
 and recorded as jobs, but the conversion step fails with `engine_not_connected`. That
 is the expected state until your engine is wired in.
 
-Set two variables and conversions start working — no code change, no redeploy of logic:
+Set two variables and conversions start working ΓÇö no code change, no redeploy of logic:
 
 ```bash
 MSW_ENGINE_URL=https://your-engine.example.com
@@ -56,7 +56,7 @@ MSW_ENGINE_TIMEOUT_MS=120000
 
 ### The contract
 
-**Request** — `POST {MSW_ENGINE_URL}/convert`, `multipart/form-data`, optional
+**Request** ΓÇö `POST {MSW_ENGINE_URL}/convert`, `multipart/form-data`, optional
 `Authorization: Bearer {MSW_ENGINE_TOKEN}`:
 
 | Field        | Type   | Notes                                              |
@@ -67,7 +67,7 @@ MSW_ENGINE_TIMEOUT_MS=120000
 | `options`    | JSON   | `targetFormat`, `includeNetlist`, `includeBom`, `includeRungsReport`, `sheetName`, `notes` |
 | `licenseKey` | string | Issued key, empty when none was selected           |
 
-**Response** — `200 application/json`:
+**Response** ΓÇö `200 application/json`:
 
 ```json
 {
@@ -76,7 +76,7 @@ MSW_ENGINE_TIMEOUT_MS=120000
       "name": "panel.msw",
       "mimeType": "application/octet-stream",
       "kind": "primary",
-      "contentBase64": "TVSW…"
+      "contentBase64": "TVSWΓÇª"
     }
   ],
   "warnings": ["Rung 2 has no terminal comment"],
@@ -93,10 +93,41 @@ MSW_ENGINE_TIMEOUT_MS=120000
   `primary` artifact.
 - `engineVersion` is recorded on the job for traceability.
 - Any non-2xx status, network failure, timeout or unparseable response becomes a readable
-  error on the job — never a silent success.
+  error on the job ΓÇö never a silent success.
 
 **Swapping engines** means changing `MSW_ENGINE_URL`. Multiple artifacts in one response
 let the engine return the MSW bundle plus a netlist, BOM and rung report in a single call.
+
+### Bundled engine: Triconex XML to TIA Portal
+
+`engine/` contains a self-contained .NET 7 solution that implements the contract above. It
+reads a Triconex XML project export and emits a Siemens TIA Portal import package: SCL
+sources per block, SimaticML UDTs, tag tables, a TIA Openness `import.ps1`, and a
+`conversion_report.txt`. It never generates `.apXX` files and never guesses silently â€” anything
+it cannot map faithfully is recorded as an approximation or a manual action in the report.
+
+**HTTP server** (what the platform talks to):
+
+```bash
+dotnet build engine/TriconexToTia.sln            # or: dotnet run --project engine/src/TriconexToTia.Server
+dotnet engine/src/TriconexToTia.Server/bin/Debug/net7.0/TriconexToTia.Server.dll
+# listens on http://localhost:5080, or $PORT / $ASPNETCORE_URLS
+```
+
+`GET /health` returns `{ ready, engineVersion, converter }`. `POST /convert` accepts the
+multipart contract above and returns the TIA package as the `primary` artifact plus the
+conversion report as a `report` artifact.
+
+**Command line** (batch or manual runs):
+
+```bash
+triconex-to-tia --input project.xml --output ./output [--tia-version 20] [--plc-cpu ORDER]
+                [--mappings custom.json] [--validate-only]
+```
+
+**Limits / auth** â€” env vars: `XFORCEMSW_ENGINE_TOKEN` (or `MSW_ENGINE_TOKEN`) requires
+`Authorization: Bearer â€¦`; `PORT` selects the listen port; `MSW_MAX_UPLOAD_BYTES` caps the
+multipart body (default 512 MB).
 
 ---
 
@@ -134,7 +165,7 @@ Rejections return a machine-readable `reason`: `unknown_key`, `expired`, `suspen
 | Enterprise     | Unlimited      | 512 MB   | 25    | 50   | 730 days  | yes |
 
 A user's effective plan is the highest of their account plan and any active license.
-Jobs older than the retention window are deleted — rows and files together — on the next
+Jobs older than the retention window are deleted ΓÇö rows and files together ΓÇö on the next
 upload, so no cron job is needed.
 
 ---
@@ -156,9 +187,9 @@ src/
       settings/              profile, password, sessions
       admin/                 users, licenses, messages, audit log
     api/
-      jobs/route.ts          POST — run a conversion
-      jobs/[id]/output/[n]/  GET  — download an artifact
-      licenses/validate/     GET / POST — license checks
+      jobs/route.ts          POST ΓÇö run a conversion
+      jobs/[id]/output/[n]/  GET  ΓÇö download an artifact
+      licenses/validate/     GET / POST ΓÇö license checks
   lib/
     env.ts                   lazy, validated configuration
     db.ts                    SQLite singleton
@@ -170,6 +201,14 @@ src/
     converter/               adapter interface + http and stub adapters
     actions/                 server actions
   components/                UI
+engine/                      C# Triconex XML -> TIA Portal conversion engine
+  src/TriconexToTia.Core/      domain model, options, results
+  src/TriconexToTia.Parser/    tolerant Triconex XML reader
+  src/TriconexToTia.Mapper/    type/library/address tables (mappings.json)
+  src/TriconexToTia.Generators/ SCL, UDT, tag, import script, report writers
+  src/TriconexToTia.Engine/    pipeline entry point
+  src/TriconexToTia.Cli/       triconex-to-tia command line
+  src/TriconexToTia.Server/    /health and /convert HTTP endpoints
 scripts/dev-session.mjs      local-only session helper
 ```
 
@@ -234,6 +273,15 @@ npm run dev     # development server
 npm run build   # production build
 npm start       # serve the production build
 npm run lint    # eslint
+```
+
+The conversion engine under `engine/` builds and tests with the .NET 7 SDK:
+
+```bash
+dotnet build engine/TriconexToTia.sln
+dotnet test  engine/TriconexToTia.sln
+dotnet run --project engine/src/TriconexToTia.Server   # http://localhost:5080
+dotnet run --project engine/src/TriconexToTia.Cli -- --input project.xml --output ./out
 ```
 
 ---

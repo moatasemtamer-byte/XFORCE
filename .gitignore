@@ -43,5 +43,10 @@ next-env.d.ts
 # local sqlite database, uploaded sources and generated artifacts
 /data
 
+# .NET engine build output and sample conversion output
+/engine/**/bin/
+/engine/**/obj/
+/engine/samples/output/
+
 # keep the template example, never the real env file
 !.env.example

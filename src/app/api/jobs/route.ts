@@ -10,20 +10,11 @@ import { clean } from "@/lib/validate";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ALLOWED_EXTENSIONS = [
-  ".sch",
-  ".lad",
-  ".xml",
-  ".edb",
-  ".txt",
-  ".csv",
-  ".pdf",
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".dwg",
-  ".dxf",
-];
+// The conversion engine reads two kinds of source: a ladder-logic PDF, or a raw
+// monospace program listing (e.g. a Triconex TRISTATION .LPT printout). Accepting
+// anything else would only produce an empty conversion, so the list is kept
+// deliberately narrow and matches what the engine can actually read.
+const ALLOWED_EXTENSIONS = [".pdf", ".txt", ".lpt", ".lst", ".log", ".csv", ".xml"];
 
 function extensionOf(name: string): string {
   const index = name.lastIndexOf(".");
@@ -51,7 +42,7 @@ export async function POST(request: Request) {
 
   const file = form.get("file");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Choose a ladder diagram to upload." }, { status: 400 });
+    return NextResponse.json({ error: "Choose a source file to upload." }, { status: 400 });
   }
 
   if (!ALLOWED_EXTENSIONS.includes(extensionOf(file.name))) {

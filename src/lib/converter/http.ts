@@ -61,13 +61,55 @@ export class HttpEngineAdapter implements ConverterAdapter {
   }
 
   async status(): Promise<EngineStatus> {
-    return {
-      ready: true,
-      adapterId: this.id,
-      label: this.label,
-      version: this.version,
-      detail: `Conversions are dispatched to ${this.baseUrl}/convert.`,
-    };
+    // Actually probe the engine rather than assuming it is up, so the badge on
+    // the marketing pages and in the dashboard cannot claim a connection that
+    // does not work. A failed probe degrades the copy instead of throwing.
+    const healthUrl = `${this.baseUrl}/health`;
+    try {
+      const response = await fetch(healthUrl, {
+        headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
+        signal: AbortSignal.timeout(Number(process.env.MSW_ENGINE_HEALTH_TIMEOUT_MS ?? 5000)),
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        return {
+          ready: false,
+          adapterId: this.id,
+          label: this.label,
+          version: this.version,
+          detail: `Engine health check returned ${response.status} from ${healthUrl}. Conversions will fail until this is resolved.`,
+        };
+      }
+
+      const body = (await response.json().catch(() => null)) as
+        | { engineVersion?: string; maxUploadBytes?: number; maxPages?: number }
+        | null;
+      const parts = [`Health check OK at ${healthUrl}`];
+      if (body?.engineVersion) parts.push(`engine ${body.engineVersion}`);
+      if (typeof body?.maxUploadBytes === "number") {
+        parts.push(`${Math.round(body.maxUploadBytes / (1024 * 1024))} MB upload cap`);
+      }
+      if (typeof body?.maxPages === "number") parts.push(`${body.maxPages} page cap`);
+
+      return {
+        ready: true,
+        adapterId: this.id,
+        label: this.label,
+        version: body?.engineVersion ?? this.version,
+        detail: `${parts.join(" · ")}. Conversions are dispatched to ${this.baseUrl}/convert.`,
+      };
+    } catch (error) {
+      return {
+        ready: false,
+        adapterId: this.id,
+        label: this.label,
+        version: this.version,
+        detail: `Could not reach the engine health check at ${healthUrl}: ${
+          error instanceof Error ? error.message : "unknown error"
+        }. Conversions will fail until this is resolved.`,
+      };
+    }
   }
 
   async convert(input: ConversionInput, options: ConversionOptions): Promise<ConversionOutcome> {
