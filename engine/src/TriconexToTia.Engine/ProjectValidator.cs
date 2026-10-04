@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using TriconexToTia.Core.Enums;
 using TriconexToTia.Core.Models;
 using TriconexToTia.Core.Results;
 using TriconexToTia.Mapper;
@@ -46,6 +47,7 @@ public sealed class ProjectValidator
         CheckTypeReferences(project, result);
         CheckDuplicateVariables(project, result);
         CheckEmptyBlocks(project, result);
+        CheckNonTextLanguages(project, result);
         CollectUnrecognizedElements(project, result);
 
         return result;
@@ -145,6 +147,26 @@ public sealed class ProjectValidator
                     block.SourceLine,
                     block.Name));
             }
+        }
+    }
+
+    /// <summary>
+    /// FBD, LD and SFC bodies cannot be carried into SCL verbatim, so the
+    /// conversion is attempted but must be verified by hand.
+    /// </summary>
+    private static void CheckNonTextLanguages(PlcProject project, ValidationResult result)
+    {
+        foreach (var block in project.Blocks)
+        {
+            if (block.Language is not (PlcLanguage.FBD or PlcLanguage.LD or PlcLanguage.SFC))
+            {
+                continue;
+            }
+
+            result.Add(ValidationIssue.Warning(
+                $"Block \"{block.Name}\" is written in {block.Language}. An SCL conversion was attempted; verify the logic by hand.",
+                block.SourceLine,
+                block.Name));
         }
     }
 

@@ -134,8 +134,8 @@ public sealed class TriconexXmlParser
     private static Function ParseFunction(XElement element) =>
         PopulateBlock(new Function(), element);
 
-    private static PlcProgram ParseProgram(XElement element) =>
-        PopulateBlock(new PlcProgram(), element);
+    private static Program ParseProgram(XElement element) =>
+        PopulateBlock(new Program(), element);
 
     private static TBlock PopulateBlock<TBlock>(TBlock block, XElement element) where TBlock : PlcBlock
     {
@@ -145,15 +145,25 @@ public sealed class TriconexXmlParser
         block.Comment = element.Attr("comment", "description") ?? element.ChildValue("Comment", "Description");
         block.ReturnType = GetReturnType(element);
 
+        // An explicit language attribute always wins: a <Code> element holding
+        // text means ST, but it can also wrap a <FBD>/<LD> body, and an
+        // attribute is the only way to tell those apart.
+        var declared = LanguageFromAttribute(element.Attr("language", "lang"));
+        if (declared == PlcLanguage.Unknown)
+        {
+            declared = null;
+        }
+
         var codeElement = element.Elements()
             .FirstOrDefault(child => child.IsNamed("Code", "Body", "Statement", "Statements", "ST", "Implementation", "Source", "Logic"));
 
         if (codeElement is not null)
         {
             block.Code = codeElement.Value;
-            block.Language = codeElement.HasElements && string.IsNullOrWhiteSpace(block.Code)
-                ? LanguageFromName(codeElement.Name.LocalName)
-                : PlcLanguage.ST;
+            block.Language = declared
+                ?? (codeElement.HasElements && string.IsNullOrWhiteSpace(block.Code)
+                    ? LanguageFromName(codeElement.Name.LocalName)
+                    : PlcLanguage.ST);
         }
         else
         {
@@ -161,12 +171,7 @@ public sealed class TriconexXmlParser
                 .Where(child => !child.HasElements && child.IsNamed("Text", "Content"))
                 .Select(child => child.Value)
                 .FirstOrDefault() ?? string.Empty;
-            block.Language = block.Code.Length > 0 ? PlcLanguage.ST : PlcLanguage.Unknown;
-        }
-
-        if (block.Language == PlcLanguage.Unknown)
-        {
-            block.Language = LanguageFromAttribute(element.Attr("language", "lang")) ?? PlcLanguage.Unknown;
+            block.Language = declared ?? (block.Code.Length > 0 ? PlcLanguage.ST : PlcLanguage.Unknown);
         }
 
         ParseVariables(element, block);

@@ -21,5 +21,5 @@ public sealed class PlcProject
 
     public IEnumerable<Function> Functions => Blocks.OfType<Function>();
 
-    public IEnumerable<PlcProgram> Programs => Blocks.OfType<PlcProgram>();
+    public IEnumerable<Program> Programs => Blocks.OfType<Program>();
 }

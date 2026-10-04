@@ -53,9 +53,9 @@ public class GeneratorOutputTests
         </Project>
         """;
 
-    private static ConversionResult Run() =>
+    private static ConversionResult Run(string? xml = null) =>
         new ConversionEngine().Run(
-            new MemoryStream(System.Text.Encoding.UTF8.GetBytes(Sample)),
+            new MemoryStream(System.Text.Encoding.UTF8.GetBytes(xml ?? Sample)),
             new ConverterOptions { TiaVersion = 20 },
             "sample.xml");
 
@@ -95,6 +95,31 @@ public class GeneratorOutputTests
         Assert.Contains("Pump : \"PumpCtrl\";", scl);
         Assert.Contains("#Pump.Start := TRUE;", scl);
         Assert.Contains("END_ORGANIZATION_BLOCK", scl);
+    }
+
+    [Fact]
+    public void Scl_generator_emits_externals_and_does_not_prefix_them()
+    {
+        var result = Run("""
+            <Project name="P">
+              <FunctionBlocks>
+                <FunctionBlock name="Ext" language="ST">
+                  <Variables>
+                    <Variable name="Shared" type="INT" direction="EXTERNAL" />
+                    <Variable name="Local" type="BOOL" />
+                  </Variables>
+                  <Code><![CDATA[Local := Shared > 0;]]></Code>
+                </FunctionBlock>
+              </FunctionBlocks>
+            </Project>
+            """);
+
+        var scl = result.Files.Single(f => f.RelativePath == "Blocks/Ext.scl").Content;
+
+        Assert.Contains("VAR_EXTERN", scl);
+        Assert.Contains("Shared : Int;", scl);
+        Assert.Contains("#Local := Shared > 0;", scl);
+        Assert.DoesNotContain("#Shared", scl);
     }
 
     [Fact]

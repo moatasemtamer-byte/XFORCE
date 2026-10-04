@@ -3,7 +3,7 @@ using TriconexToTia.Core.Enums;
 namespace TriconexToTia.Core.Models;
 
 /// <summary>A Triconex PROGRAM becomes a Siemens organization block (OB).</summary>
-public sealed class PlcProgram : PlcBlock
+public sealed class Program : PlcBlock
 {
     public override BlockType BlockType => BlockType.OB;
 

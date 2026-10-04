@@ -43,6 +43,7 @@ public sealed class SclGenerator : IGenerator
         builder.AppendLine("VERSION : 0.1");
         builder.AppendLine();
 
+        AppendSection(builder, "VAR_EXTERN", block, VariableDirection.External);
         AppendSection(builder, "VAR_INPUT", block, VariableDirection.Input);
         AppendSection(builder, "VAR_OUTPUT", block, VariableDirection.Output);
         AppendSection(builder, "VAR_IN_OUT", block, VariableDirection.InOut);
