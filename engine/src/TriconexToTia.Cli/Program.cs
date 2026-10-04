@@ -11,6 +11,12 @@ internal static class Program
 
         var options = CliOptions.Parse(args);
 
+        if (options.ShowVersion)
+        {
+            Console.WriteLine($"triconex-to-tia {ConversionEngine.Version}");
+            return 0;
+        }
+
         if (options.ShowHelp)
         {
             Console.WriteLine(CliOptions.Usage);
@@ -69,6 +75,7 @@ internal static class Program
         }
 
         var output = options.Output!;
+        WarnIfNotEmpty(output);
         Directory.CreateDirectory(output);
 
         var written = 0;
@@ -93,7 +100,31 @@ internal static class Program
         Console.WriteLine($"  Manual   : {result.Mapping.ManualActions.Count}");
         Console.WriteLine($"  Files    : {written} written to {Path.GetFullPath(output)}");
         Console.WriteLine($"  Report   : {Path.Combine(Path.GetFullPath(output), "conversion_report.txt")}");
+
+        if (result.Mapping.ManualActions.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"{result.Mapping.ManualActions.Count} item(s) need manual action in TIA Portal; see the report for details.");
+        }
+
         return 0;
+    }
+
+    private static void WarnIfNotEmpty(string output)
+    {
+        if (!Directory.Exists(output)) return;
+
+        try
+        {
+            if (Directory.EnumerateFileSystemEntries(output, "*", SearchOption.AllDirectories).Any())
+            {
+                Console.Error.WriteLine($"Warning: output directory is not empty; same-named files will be overwritten ({Path.GetFullPath(output)}).");
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Warning: could not inspect output directory: {exception.Message}");
+        }
     }
 
     private static void PrintValidation(ConversionResult result)
