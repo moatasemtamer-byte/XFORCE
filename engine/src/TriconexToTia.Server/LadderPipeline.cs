@@ -30,12 +30,15 @@ public static class LadderPipeline
 
     /// <summary>
     /// Turns an uploaded PDF or LPT into TriStation PLCopen XML, returning the bytes.
+    /// <paramref name="reportStage"/> (when given) receives a short stage label before each
+    /// long-running tool runs, so an HTTP caller can show real progress.
     /// </summary>
     public static async Task<Result> BuildXmlAsync(
         Stream source,
         string filename,
         Stream? dpt,
         Stream? template,
+        Action<string>? reportStage,
         CancellationToken cancellationToken)
     {
         var report = new StringBuilder();
@@ -89,6 +92,7 @@ public static class LadderPipeline
             }
 
             var stem = Path.Combine(work, "listing");
+            reportStage?.Invoke("circuit-reader");
             var (exit, output) = await RunAsync(circuitReader, cancellationToken,
                 "analyze", sourcePath, "--format", "tristation", "--out", stem);
             report.AppendLine(output);
@@ -127,6 +131,7 @@ public static class LadderPipeline
             cliArgs.AddRange(new[] { "--xlsx", workbookPath, "--out", xmlPath });
             if (templatePath is not null && File.Exists(templatePath)) cliArgs.AddRange(new[] { "--template", templatePath });
 
+            reportStage?.Invoke("ladder cli");
             var (cliExit, cliOutput) = await RunAsync(ladderCli, cancellationToken, cliArgs.ToArray());
             report.AppendLine(cliOutput);
 

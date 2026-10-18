@@ -1,0 +1,87 @@
+name: Monitor
+
+# Uptime probe + live end-to-end check against the deployed Railway services. Runs on a
+# schedule and on demand; on failure it opens (or reuses) a GitHub issue so a dead engine
+# does not wait for someone to notice a blank page. Configure MSW_ENGINE_TOKEN as a repo
+# secret to enable the conversion E2E; without it only the unauthenticated probes run.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  probe:
+    name: Live probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WEB_URL: ${{ vars.MSW_WEB_URL || 'https://web-production-951a17.up.railway.app' }}
+      MSW_ENGINE_TOKEN: ${{ secrets.MSW_ENGINE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe web root
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$WEB_URL/")
+          echo "GET / -> $code"
+          test "$code" = "200"
+
+      - name: Probe engine through the web proxy
+        run: |
+          body=$(curl -sf --max-time 30 "$WEB_URL/api/engine/health")
+          echo "$body"
+          echo "$body" | grep -q '"available":true'
+
+      - name: Probe conversion history
+        run: |
+          body=$(curl -sf --max-time 30 "$WEB_URL/api/engine/history?limit=5")
+          echo "$body" | grep -q '"entries"'
+
+      - name: Live E2E — convert the sample XML to XML
+        if: env.MSW_ENGINE_TOKEN != ''
+        run: |
+          boundary="mswprobe$(date +%s)"
+          body_file=$(mktemp)
+          {
+            printf -- '--%s\r\n' "$boundary"
+            printf 'Content-Disposition: form-data; name="file"; filename="sample-project.xml"\r\n'
+            printf 'Content-Type: application/xml\r\n\r\n'
+            cat engine/samples/sample-project.xml
+            printf '\r\n--%s\r\n' "$boundary"
+            printf 'Content-Disposition: form-data; name="target"\r\n\r\nxml'
+            printf '\r\n--%s--\r\n' "$boundary"
+          } > "$body_file"
+          response=$(curl -sf --max-time 600 \
+            -H "Authorization: Bearer $MSW_ENGINE_TOKEN" \
+            -H "Content-Type: multipart/form-data; boundary=$boundary" \
+            --data-binary "@$body_file" \
+            "$WEB_URL/api/engine/convert")
+          echo "$response" | head -c 400
+          echo "$response" | grep -q '"artifacts"'
+
+      - name: Open or reuse an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Engine uptime probe failed ($(date -u +%Y-%m-%d))"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "issue #$existing already open"
+            exit 0
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "$title" \
+            --label "bug" \
+            --body "The scheduled Monitor workflow failed against \`$WEB_URL\`.
+
+          Check the [workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) for which probe failed.
+
+          Manual checks:
+          - \`curl $WEB_URL/api/engine/health\`
+          - \`curl $WEB_URL/api/engine/history?limit=5\`
+          - Railway dashboard → engine service logs (watch for the AV crash 0xc0000005)"

@@ -57,6 +57,11 @@ export async function POST(request: Request) {
   if (typeof target === "string") forwarded.set("target", target);
   const notes = form.get("notes");
   if (typeof notes === "string") forwarded.set("notes", notes);
+  // Lets the browser poll /api/engine/progress/{id} while this request is still running.
+  const progressId = form.get("progressId");
+  if (typeof progressId === "string" && /^[a-zA-Z0-9-]{1,64}$/.test(progressId)) {
+    forwarded.set("progressId", progressId);
+  }
   // Ladder inputs (PDF/LPT) also carry the DPT dictionary and the template library.
   for (const side of ["dpt", "template"] as const) {
     const sideFile = form.get(side);

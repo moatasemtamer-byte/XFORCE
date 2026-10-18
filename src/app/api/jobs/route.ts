@@ -10,11 +10,15 @@ import { clean } from "@/lib/validate";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// The conversion engine reads two kinds of source: a ladder-logic PDF, or a raw
-// monospace program listing (e.g. a Triconex TRISTATION .LPT printout). Accepting
-// anything else would only produce an empty conversion, so the list is kept
-// deliberately narrow and matches what the engine can actually read.
-const ALLOWED_EXTENSIONS = [".pdf", ".txt", ".lpt", ".lst", ".log", ".csv", ".xml"];
+// The conversion engine reads several source families: ladder PDFs and TRISTATION listings
+// (.pdf/.lpt/.txt), TriStation XML exports, raw TriStation project containers (.pt2/.pt2x),
+// and Siemens SimaticML exports (.zip or a single block .xml, plus .ap16–.ap20 shorthands).
+// The engine sniffs contents, so the list stays aligned with its PrepareSourceAsync.
+const ALLOWED_EXTENSIONS = [
+  ".pdf", ".txt", ".lpt", ".lst", ".log", ".csv",
+  ".xml", ".zip", ".pt2", ".pt2x",
+  ".ap16", ".ap17", ".ap18", ".ap19", ".ap20",
+];
 
 function extensionOf(name: string): string {
   const index = name.lastIndexOf(".");
@@ -92,9 +96,13 @@ export async function POST(request: Request) {
     }
   }
 
+  const rawTarget = clean(form.get("target"), 10);
   const options: ConversionOptions = {
     ...DEFAULT_OPTIONS,
     targetFormat: clean(form.get("targetFormat"), 20) || DEFAULT_OPTIONS.targetFormat,
+    // "tia" (the import package) is the default: it is what every job returned before the
+    // target field existed, so omitting it keeps old clients working.
+    target: rawTarget === "xml" || rawTarget === "pt2x" || rawTarget === "tia" ? rawTarget : "tia",
     includeNetlist: form.get("includeNetlist") === "on",
     includeBom: form.get("includeBom") === "on",
     includeRungsReport: form.get("includeRungsReport") === "on",

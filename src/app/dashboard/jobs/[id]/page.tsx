@@ -2,19 +2,18 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { getJobForUser } from "@/lib/jobs";
+import { PageTitle } from "@/components/dashboard/page-title";
 import { JobStatusBadge } from "@/components/dashboard/job-bits";
-import { Badge, ButtonLink, EmptyState, Panel, PanelTitle } from "@/components/ui";
+import { JobAutoRefresh } from "@/components/dashboard/job-auto-refresh";
+import { Badge, ButtonLink, Panel, PanelTitle, Stat, cx } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/util";
-import { getDb } from "@/lib/db";
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b border-ink-800 py-2.5 last:border-0">
-      <dt className="text-xs text-mist-500">{label}</dt>
-      <dd className="text-right text-xs text-mist-200">{value}</dd>
-    </div>
-  );
-}
+const TARGET_LABELS: Record<string, string> = {
+  tia: "TIA package",
+  pt2x: "PT2X",
+  xml: "TriStation XML",
+  msw: "TIA package",
+};
 
 export default async function JobDetailPage({ params }: PageProps<"/dashboard/jobs/[id]">) {
   const user = await getCurrentUser();
@@ -24,128 +23,161 @@ export default async function JobDetailPage({ params }: PageProps<"/dashboard/jo
   const job = getJobForUser(id, user.id);
   if (!job) notFound();
 
-  const license = job.license_id
-    ? ((getDb().prepare("SELECT * FROM licenses WHERE id = ?").get(job.license_id) as
-        | { key: string; plan: string }
-        | undefined) ?? null)
-    : null;
-
-  const optionEntries = Object.entries(job.options).filter(
-    ([, value]) => value !== null && value !== "",
-  );
+  const running = job.status === "processing" || job.status === "queued";
+  const targetRaw = typeof job.options.target === "string" ? job.options.target : "tia";
+  const targetLabel = TARGET_LABELS[targetRaw] ?? targetRaw;
 
   return (
     <div className="space-y-8">
-      <div>
-        <Link
-          href="/dashboard/jobs"
-          className="text-xs text-mist-500 underline-offset-4 hover:text-mist-200 hover:underline"
-        >
-          ← All jobs
-        </Link>
-        <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="font-mono text-lg font-semibold text-mist-100">{job.source_name}</h1>
-            <p className="mt-1 font-mono text-[11px] text-ink-400">{job.id}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <JobStatusBadge status={job.status} />
-            {license ? <Badge tone="info">{license.plan} key</Badge> : null}
-          </div>
-        </div>
-      </div>
+      <JobAutoRefresh active={running} />
 
-      {job.status === "failed" && job.error ? (
-        <div className="rounded-[14px] border border-bad-500/40 bg-bad-500/10 p-5">
-          <p className="text-sm font-semibold text-bad-500">Conversion failed</p>
-          <p className="mt-2 font-mono text-xs leading-relaxed text-mist-300">{job.error}</p>
-        </div>
-      ) : null}
-
-      <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr] lg:items-start">
-        <div className="space-y-6">
-          <Panel>
-            <PanelTitle
-              title="Outputs"
-              description={
-                job.status === "completed"
-                  ? `${job.outputs.length} file${job.outputs.length === 1 ? "" : "s"} ready to download.`
-                  : "Outputs appear here once the job completes."
-              }
-            />
-            {job.outputs.length === 0 ? (
-              <EmptyState
-                title="No outputs yet"
-                description="Either the conversion is still running, or it failed before producing a result. The error, if any, is shown above."
-              />
-            ) : (
-              <ul className="divide-y divide-ink-800">
-                {job.outputs.map((output, index) => (
-                  <li key={output.path} className="flex items-center justify-between gap-4 px-5 py-3.5">
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-xs text-mist-200">{output.name}</p>
-                      <p className="mt-0.5 text-[11px] text-mist-500">
-                        {output.kind} · {output.mimeType} · {formatBytes(output.size)}
-                      </p>
-                    </div>
-                    <a
-                      href={`/api/jobs/${job.id}/output/${index}`}
-                      className="shrink-0 rounded-lg border border-ink-600 px-3 py-1.5 text-xs text-mist-200 transition-colors hover:border-signal-500/60 hover:text-signal-300"
-                    >
-                      Download
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Panel>
-
-          {job.warnings.length > 0 ? (
-            <Panel>
-              <PanelTitle title="Warnings" description="Reported by the engine. Review before shipping." />
-              <ul className="space-y-2.5 px-5 py-4">
-                {job.warnings.map((warning, index) => (
-                  <li key={index} className="flex gap-2.5 text-xs leading-relaxed text-amberline-400">
-                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-amberline-400" />
-                    {warning}
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          ) : null}
-
-          {optionEntries.length > 0 ? (
-            <Panel>
-              <PanelTitle title="Options sent to the engine" />
-              <dl className="px-5 py-3">
-                {optionEntries.map(([key, value]) => (
-                  <Row key={key} label={key} value={<span className="font-mono">{String(value)}</span>} />
-                ))}
-              </dl>
-            </Panel>
-          ) : null}
-        </div>
-
-        <Panel className="p-5">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mist-500">Details</p>
-          <dl className="mt-4">
-            <Row label="Status" value={<JobStatusBadge status={job.status} />} />
-            <Row label="Engine" value={<span className="font-mono">{job.engine}</span>} />
-            <Row label="Source size" value={formatBytes(job.source_size)} />
-            <Row label="License" value={license ? <span className="font-mono text-[11px]">{license.key.slice(0, 14)}…</span> : "—"} />
-            <Row label="Created" value={formatDateTime(job.created_at)} />
-            <Row label="Started" value={formatDateTime(job.started_at)} />
-            <Row label="Finished" value={formatDateTime(job.finished_at)} />
-            <Row label="Progress" value={`${job.progress}%`} />
-          </dl>
-
-          <div className="mt-6">
-            <ButtonLink href="/dashboard/convert" variant="outline" size="sm" className="w-full">
-              Run another conversion
+      <PageTitle
+        title={job.source_name}
+        description={`Conversion job ${job.id} · ${formatBytes(job.source_size)} · started ${formatDateTime(job.started_at ?? job.created_at)}`}
+        action={
+          <div className="flex gap-2">
+            <ButtonLink href="/dashboard/jobs" variant="outline" size="sm">
+              All jobs
+            </ButtonLink>
+            <ButtonLink href="/dashboard/convert" size="sm">
+              New conversion
             </ButtonLink>
           </div>
+        }
+      />
+
+      {/* ---- Status ---- */}
+      <Panel className="p-5">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex items-center gap-3">
+            <JobStatusBadge status={job.status} />
+            {running ? (
+              <span className="text-xs text-mist-500">This page refreshes itself while the job runs.</span>
+            ) : null}
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-mist-400">
+            <span>
+              Output: <span className="font-medium text-mist-200">{targetLabel}</span>
+            </span>
+            <span>
+              Engine: <span className="font-mono">{job.engine}</span>
+            </span>
+            {job.finished_at ? <span>Finished {formatDateTime(job.finished_at)}</span> : null}
+          </div>
+        </div>
+
+        {running ? (
+          <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-ink-800">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-signal-600 to-signal-400" />
+          </div>
+        ) : null}
+
+        {job.error ? (
+          <p
+            role="alert"
+            className="mt-4 rounded-lg border border-bad-500/40 bg-bad-500/10 px-3.5 py-2.5 text-xs leading-relaxed text-bad-500"
+          >
+            {job.error}
+          </p>
+        ) : null}
+      </Panel>
+
+      {/* ---- Outputs ---- */}
+      {job.status === "completed" ? (
+        <Panel>
+          <PanelTitle
+            title="Downloads"
+            description={job.outputs.length === 1 ? "1 file" : `${job.outputs.length} files`}
+          />
+          <ul className="divide-y divide-ink-800">
+            {job.outputs.map((output, index) => (
+              <li key={output.name} className="flex items-center gap-4 px-5 py-3">
+                <span
+                  className={cx(
+                    "grid h-8 w-8 shrink-0 place-items-center rounded-md border",
+                    output.kind === "primary"
+                      ? "border-signal-500/40 bg-signal-500/10 text-signal-300"
+                      : "border-ink-700 bg-ink-900/60 text-mist-500",
+                  )}
+                  aria-hidden="true"
+                >
+                  {output.kind === "primary" ? (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path d="M12 4v12m0 0l-4-4m4 4l4-4" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M4 18v1a2 2 0 002 2h12a2 2 0 002-2v-1" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path d="M7 3h7l4 4v14H7z" />
+                      <path d="M14 3v4h4" />
+                    </svg>
+                  )}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-mono text-xs text-mist-200">{output.name}</p>
+                  <p className="mt-0.5 text-[11px] text-mist-500">{formatBytes(output.size)}</p>
+                </div>
+                <Badge tone={output.kind === "primary" ? "good" : "neutral"}>{output.kind}</Badge>
+                <a
+                  href={`/api/jobs/${job.id}/output/${index}`}
+                  className="shrink-0 rounded-lg border border-ink-600 px-3 py-1.5 text-xs font-medium text-mist-200 transition-colors hover:border-signal-500/60 hover:text-mist-100"
+                >
+                  Download
+                </a>
+              </li>
+            ))}
+          </ul>
         </Panel>
+      ) : null}
+
+      {/* ---- Warnings ---- */}
+      {job.warnings.length > 0 ? (
+        <Panel>
+          <PanelTitle title={`Warnings (${job.warnings.length})`} description="Non-fatal issues the engine reported." />
+          <ul className="space-y-2 px-5 py-4">
+            {job.warnings.map((warning, index) => (
+              <li key={index} className="flex gap-2.5 text-xs leading-relaxed text-mist-400">
+                <span aria-hidden="true" className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amberline-400" />
+                {warning}
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
+
+      {/* ---- Detail ---- */}
+      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Source size" value={formatBytes(job.source_size)} />
+        <Stat label="Progress" value={job.status === "completed" ? "100%" : running ? `${job.progress}%` : job.status === "failed" ? "Failed" : `${job.progress}%`} />
+        <Stat label="Created" value={formatDateTime(job.created_at)} />
+        <Stat label="Finished" value={job.finished_at ? formatDateTime(job.finished_at) : "—"} />
       </div>
+
+      {Object.keys(job.options).length > 0 ? (
+        <Panel>
+          <PanelTitle title="Options" description="The settings this job ran with." />
+          <dl className="grid gap-x-8 gap-y-3 px-5 py-4 sm:grid-cols-2">
+            {Object.entries(job.options).map(([key, value]) => (
+              <div key={key} className="flex items-baseline justify-between gap-4 text-xs">
+                <dt className="shrink-0 text-mist-500">{key}</dt>
+                <dd className="truncate font-mono text-mist-300" title={String(value)}>
+                  {value === null ? "—" : String(value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </Panel>
+      ) : null}
+
+      {job.status === "failed" ? (
+        <p className="text-xs text-mist-500">
+          Fixed the source?{" "}
+          <Link href="/dashboard/convert" className="text-signal-300 underline-offset-4 hover:underline">
+            Start a new conversion
+          </Link>
+          .
+        </p>
+      ) : null}
     </div>
   );
 }

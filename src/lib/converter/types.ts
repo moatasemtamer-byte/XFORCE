@@ -1,5 +1,8 @@
 export interface ConversionOptions {
   targetFormat: string;
+  /** Which artifact the engine should return: the TriStation XML, a PT2X container, or the
+   *  TIA import package (default). Matches the engine's `target` form field. */
+  target?: "xml" | "pt2x" | "tia";
   includeNetlist: boolean;
   includeBom: boolean;
   includeRungsReport: boolean;

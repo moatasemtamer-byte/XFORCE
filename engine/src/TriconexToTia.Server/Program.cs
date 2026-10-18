@@ -88,12 +88,28 @@ app.MapPost("/convert", async (HttpRequest request) =>
     if (file is null || form is null) return error!;
 
     var target = (form["target"].ToString() ?? string.Empty).Trim().ToLowerInvariant();
+    var progressId = (form["progressId"].ToString() ?? string.Empty).Trim();
+    var conversionId = progressId.Length > 0 ? progressId : Guid.NewGuid().ToString("N");
+    var sourceKind = ClassifySource(filename!);
+    var startedAt = DateTimeOffset.UtcNow;
+    var succeeded = false;
+    var failure = (string?)null;
+    var artifactCount = (int?)null;
 
+    ConversionProgress.Report(progressId, "preparing");
+
+    try
+    {
     // Normalize the upload to TriStation PLCopen XML before any target runs: a ladder PDF/listing
     // goes through the ladder pipeline, a Siemens SimaticML export (AP) is translated by pt2conv,
     // and a TriStation XML passes straight through. Every target then consumes the same file.
-    var prepared = await PrepareSourceAsync(file, filename!, form, request.HttpContext.RequestAborted);
-    if (prepared.Error is not null) return prepared.Error;
+    var prepared = await PrepareSourceAsync(file, filename!, form, stage => ConversionProgress.Report(progressId, stage),
+        request.HttpContext.RequestAborted);
+    if (prepared.Error is not null)
+    {
+        failure = "The source file could not be normalized to TriStation XML.";
+        return prepared.Error;
+    }
 
     var sourceBytes = prepared.Xml!;
     filename = prepared.FileName;
@@ -139,6 +155,8 @@ app.MapPost("/convert", async (HttpRequest request) =>
             ("ladder_report.txt", ladderReport),
             ("simatic_report.txt", importReport));
 
+        succeeded = true;
+        artifactCount = xmlArtifacts.Count;
         return Results.Json(
             new
             {
@@ -158,12 +176,14 @@ app.MapPost("/convert", async (HttpRequest request) =>
     // touches the TIA generator, so it short-circuits before the engine runs.
     if (target is "pt2x")
     {
+        ConversionProgress.Report(progressId, "building pt2x");
         await using var source = new MemoryStream(sourceBytes, writable: false);
         var built = await Pt2xBuilder.BuildAsync(source, filename!, request.HttpContext.RequestAborted);
         if (!built.Success)
         {
+            failure = built.Error ?? "PT2X build failed.";
             return Results.Json(
-                new { error = built.Error ?? "PT2X build failed.", report = built.Report, ladderReport },
+                new { error = failure, report = built.Report, ladderReport },
                 statusCode: StatusCodes.Status422UnprocessableEntity);
         }
 
@@ -213,6 +233,8 @@ app.MapPost("/convert", async (HttpRequest request) =>
             ("ladder_report.txt", ladderReport),
             ("simatic_report.txt", importReport));
 
+        succeeded = true;
+        artifactCount = artifacts.Count;
         return Results.Json(
             new
             {
@@ -224,6 +246,7 @@ app.MapPost("/convert", async (HttpRequest request) =>
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
     }
 
+    ConversionProgress.Report(progressId, "converting");
     ConversionResult result;
     try
     {
@@ -233,16 +256,18 @@ app.MapPost("/convert", async (HttpRequest request) =>
     }
     catch (Exception exception)
     {
+        failure = $"Conversion crashed: {exception.Message}";
         return Results.Json(
-            new { error = $"Conversion crashed: {exception.Message}", ladderReport },
+            new { error = failure, ladderReport },
             statusCode: StatusCodes.Status500InternalServerError);
     }
 
     if (!result.Success)
     {
         var fatal = result.Validation.Fatal.Select(issue => issue.Message).ToArray();
+        failure = result.FatalError ?? "Conversion failed.";
         return Results.Json(
-            new { error = result.FatalError ?? "Conversion failed.", fatal, ladderReport },
+            new { error = failure, fatal, ladderReport },
             statusCode: StatusCodes.Status422UnprocessableEntity);
     }
 
@@ -273,6 +298,8 @@ app.MapPost("/convert", async (HttpRequest request) =>
         ("conversion_report.txt", result.Report),
         ("ladder_report.txt", ladderReport));
 
+    succeeded = true;
+    artifactCount = tiaArtifacts.Count;
     return Results.Json(
         new
         {
@@ -282,6 +309,21 @@ app.MapPost("/convert", async (HttpRequest request) =>
             engineVersion = ConversionEngine.Version,
         },
         new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+    }
+    finally
+    {
+        ConversionProgress.Complete(progressId, failure);
+        ConversionHistory.Record(
+            evidenceDir,
+            conversionId,
+            Path.GetFileName(filename!) ?? "upload",
+            sourceKind,
+            target.Length > 0 ? target : "tia",
+            succeeded,
+            (long)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds,
+            artifactCount,
+            failure);
+    }
 });
 
 // Converts the upload and then drives TIA Portal (Siemens Openness) to produce an openable .ap16
@@ -393,6 +435,35 @@ app.MapGet("/api/evidence/{name}", (string name, HttpRequest request) =>
     return Results.Text(File.ReadAllText(path), contentType);
 });
 
+// In-flight progress: the browser sends a random progressId with the upload and polls this
+// while the synchronous /convert request is still running. Requires the same bearer token as
+// /convert so only whoever can convert can watch.
+app.MapGet("/api/progress/{id}", (string id, HttpRequest request) =>
+{
+    if (!IsAuthorized(request, authToken))
+    {
+        return Results.Json(new { error = "unauthorized" }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    var state = ConversionProgress.Get(id);
+    return state is null
+        ? Results.NotFound(new { error = "Unknown progress id." })
+        : Results.Json(state);
+});
+
+// What the engine has converted, newest first, from the append-only history.jsonl kept next
+// to the evidence reports. Empty (not an error) when no directory is configured.
+app.MapGet("/api/history", (HttpRequest request) =>
+{
+    if (!TryResolveDirs(request, out var output, out _, out var error))
+    {
+        return Results.Json(new { error }, statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    var limit = int.TryParse(request.Query["limit"], out var parsed) ? parsed : 50;
+    return Results.Json(ConversionHistory.Read(output, limit), statusJson);
+});
+
 app.Run();
 
 static bool TryResolveDirs(HttpRequest request, out string output, out string status, out string? error)
@@ -470,7 +541,8 @@ static async Task<(ConversionResult? Result, IResult? Error)> ConvertUploadAsync
     var (file, filename, form, error) = await ReadUploadAsync(request, authToken);
     if (file is null || form is null) return (null, error!);
 
-    var prepared = await PrepareSourceAsync(file, filename!, form, request.HttpContext.RequestAborted);
+    var prepared = await PrepareSourceAsync(file, filename!, form, stage => ConversionProgress.Report(form["progressId"], stage),
+        request.HttpContext.RequestAborted);
     if (prepared.Error is not null) return (null, prepared.Error);
 
     var options = ReadOptions(form["options"].ToString(), form["notes"].ToString());
@@ -507,16 +579,18 @@ static async Task<(byte[]? Xml, string FileName, string LadderReport, string Imp
     IFormFile file,
     string filename,
     IFormCollection form,
+    Action<string>? reportStage,
     CancellationToken cancellationToken)
 {
     var extension = Path.GetExtension(filename).ToLowerInvariant();
 
     if (extension is ".pdf" or ".lpt" or ".txt")
     {
+        reportStage?.Invoke("reading ladder");
         await using var sourceStream = file.OpenReadStream();
         await using var dptStream = form.Files.GetFile("dpt")?.OpenReadStream();
         await using var templateStream = form.Files.GetFile("template")?.OpenReadStream();
-        var ladder = await LadderPipeline.BuildXmlAsync(sourceStream, filename, dptStream, templateStream, cancellationToken);
+        var ladder = await LadderPipeline.BuildXmlAsync(sourceStream, filename, dptStream, templateStream, reportStage, cancellationToken);
         if (!ladder.Success)
         {
             return (null, filename, string.Empty, string.Empty, Results.Json(
@@ -535,6 +609,7 @@ static async Task<(byte[]? Xml, string FileName, string LadderReport, string Imp
     // A raw TriStation project container (.pt2/.pt2x) is decompiled to TriStation PLCopen XML.
     if (Pt2Importer.LooksLikePt2(bytes))
     {
+        reportStage?.Invoke("decompiling project");
         var decompiled = await Pt2Importer.ConvertAsync(bytes, filename, cancellationToken);
         if (!decompiled.Success)
         {
@@ -785,6 +860,20 @@ static string Sanitize(string name)
     if (string.IsNullOrWhiteSpace(name)) return "Converted";
     var invalid = Path.GetInvalidFileNameChars();
     return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
+}
+
+/// <summary>A coarse source-family label for the conversion history (ladder, xml, project, simaticml).</summary>
+static string ClassifySource(string filename)
+{
+    var extension = Path.GetExtension(filename).ToLowerInvariant();
+    return extension switch
+    {
+        ".pdf" or ".lpt" or ".txt" => "ladder",
+        ".xml" => "xml",
+        ".pt2" or ".pt2x" => "project",
+        ".zip" or ".ap16" or ".ap17" or ".ap18" or ".ap19" or ".ap20" => "simaticml",
+        _ => "unknown",
+    };
 }
 
 static long ReadLong(string name, long fallback)

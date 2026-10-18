@@ -18,6 +18,7 @@ import {
   type TargetKind,
 } from "@/components/engine/convert-flow";
 import { ConvertStations } from "@/components/nx/convert-stations";
+import { ConvertHistory } from "@/components/engine/convert-history";
 import {
   NxButton,
   NxField,
@@ -104,6 +105,9 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
   const [buildProject, setBuildProject] = useState(false);
   const [tiaImportAvailable, setTiaImportAvailable] = useState<boolean | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [progressStage, setProgressStage] = useState<string | null>(null);
+  const [progressId, setProgressId] = useState<string | null>(null);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fileSourceKind = useMemo(() => sourceKindForFile(file?.name), [file]);
@@ -148,6 +152,30 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
     return () => window.clearInterval(id);
   }, [busy]);
 
+  // Polls the engine for the real pipeline stage of the in-flight conversion. The engine
+  // keeps progress in memory keyed by the progressId sent with the upload; a 404 or a lost
+  // poll just leaves the previous stage in place, so this can only ever improve the display.
+  useEffect(() => {
+    if (!busy || !progressId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/engine/progress/${progressId}`);
+        if (!response.ok) return;
+        const payload = (await response.json()) as { stage?: string; done?: boolean };
+        if (!cancelled && payload.stage) setProgressStage(payload.stage);
+      } catch {
+        // Polling is best-effort; the conversion itself is unaffected.
+      }
+    };
+    void poll();
+    const id = window.setInterval(() => void poll(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [busy, progressId]);
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
@@ -177,6 +205,15 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
     setLastDurationMs(null);
   }
 
+  // "Try again" after a failure: clear the error but keep the uploaded file so
+  // the user does not have to re-pick it.
+  function retryKeepingFile() {
+    setError(null);
+    setErrorLog(null);
+    setResult(null);
+    setLastDurationMs(null);
+  }
+
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!file) return;
@@ -186,11 +223,19 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
     setErrorLog(null);
     setResult(null);
     setLastDurationMs(null);
+    setProgressStage(null);
+    // A random id the engine echoes into its in-memory progress store; polled while busy.
+    const id = (typeof crypto !== "undefined" && "randomUUID" in crypto)
+      ? crypto.randomUUID()
+      : `p-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    setProgressId(id);
     const startedAt = Date.now();
+    let failed = false;
     try {
       const body = new FormData();
       body.set("file", file);
       body.set("target", target);
+      body.set("progressId", id);
       body.set("options", JSON.stringify({ tiaVersion, cpu: cpu.trim() || DEFAULT_CPU_ORDER_NUMBER, fbdOutput, fbdDialect }));
       if (notes.trim()) body.set("notes", notes.trim());
       if (dptFile) body.set("dpt", dptFile);
@@ -199,6 +244,7 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
       const response = await fetch(endpoint, { method: "POST", body });
       const json = (await response.json()) as ConvertResult;
       if (!response.ok) {
+        failed = true;
         setError(json.error ?? `The engine returned ${response.status}.`);
         const detail = json.report ?? json.ladderReport ?? json.log;
         if (detail) setErrorLog(detail);
@@ -207,9 +253,15 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
       setResult(json);
       setLastDurationMs(Date.now() - startedAt);
     } catch (cause) {
+      failed = true;
       setError(cause instanceof Error ? cause.message : "The conversion request failed.");
     } finally {
       setBusy(false);
+      // A failed run clears the cursor so the retry starts from the top; a successful one
+      // keeps the terminal stage ("done") so every station stays checked.
+      if (failed) setProgressStage(null);
+      // The engine writes history as the request settles; refresh the sidebar list.
+      setHistoryRefresh((n) => n + 1);
     }
   }
 
@@ -604,7 +656,7 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
               </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-3 border-t border-nx-fail-fg/20 pt-3">
-              <button type="button" onClick={resetAll} className="text-xs font-semibold text-nx-fail-fg underline hover:text-nx-ink">
+              <button type="button" onClick={retryKeepingFile} className="text-xs font-semibold text-nx-fail-fg underline hover:text-nx-ink">
                 Try again
               </button>
               <Link href="/" className="text-xs font-semibold text-nx-hint underline hover:text-nx-ink">
@@ -658,7 +710,8 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
           </p>
         </NxPanel>
 
-        <ConvertStations active={busy} />
+        <ConvertStations active={busy} stage={progressStage} />
+        <ConvertHistory refreshKey={historyRefresh} />
       </div>
     </div>
   );

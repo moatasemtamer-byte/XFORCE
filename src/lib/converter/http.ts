@@ -118,6 +118,11 @@ export class HttpEngineAdapter implements ConverterAdapter {
     form.set("filename", input.filename);
     form.set("licenseKey", input.licenseKey ?? "");
     form.set("options", JSON.stringify(options));
+    // Which artifact the engine returns. Absent/unknown means the engine's own default,
+    // the TIA import package — the same behavior as before this field existed.
+    if (options.target === "xml" || options.target === "pt2x" || options.target === "tia") {
+      form.set("target", options.target);
+    }
     form.set("file", new Blob([new Uint8Array(input.bytes)], { type: input.mimeType }), input.filename);
 
     const headers: Record<string, string> = {};

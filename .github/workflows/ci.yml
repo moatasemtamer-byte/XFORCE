@@ -36,3 +36,26 @@ jobs:
       - run: npm run build
         env:
           SESSION_SECRET: ci-only-not-a-real-secret
+
+  engine-image:
+    name: Engine image (Dockerfile.engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The image that actually runs on Railway is only built at deploy time; building it
+      # here means a Dockerfile or publish break surfaces on the PR instead of on ship.
+      - name: Build
+        run: docker build -f Dockerfile.engine -t msw-engine:ci .
+      - name: Smoke — the server starts and reports health
+        run: |
+          docker run -d --rm --name msw-engine-ci -e PORT=8080 -p 8080:8080 msw-engine:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health > /dev/null; then
+              curl -sf http://localhost:8080/health
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "engine did not become healthy in 60s" >&2
+          docker logs msw-engine-ci || true
+          exit 1
