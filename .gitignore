@@ -80,5 +80,8 @@ next-env.d.ts
 /.pytest_cache/
 /.dev_loop/
 
+# scratch debugger harness for pt2conv (holds build output, not source of truth)
+/pt2-conv/tests/
+
 # keep the template example, never the real env file
 !.env.example
