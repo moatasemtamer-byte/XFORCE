@@ -464,6 +464,37 @@ app.MapGet("/api/history", (HttpRequest request) =>
     return Results.Json(ConversionHistory.Read(output, limit), statusJson);
 });
 
+// Opens a TriStation project (.pt2/.pt2x) for review: decompiles the container to a JSON
+// model (POUs, interface variables, FBD sheets with geometry and wires, global tags) that
+// the web viewer renders in the browser. Same bearer token as /convert.
+app.MapPost("/api/inspect", async (HttpRequest request) =>
+{
+    var (file, filename, _, error) = await ReadUploadAsync(request, authToken);
+    if (file is null) return error!;
+
+    await using var stream = file.OpenReadStream();
+    using var buffer = new MemoryStream();
+    await stream.CopyToAsync(buffer, request.HttpContext.RequestAborted);
+    var bytes = buffer.ToArray();
+
+    if (!Pt2Importer.LooksLikePt2(bytes))
+    {
+        return Results.Json(
+            new { error = $"'{filename}' is not a TriStation project container (.pt2/.pt2x)." },
+            statusCode: StatusCodes.Status415UnsupportedMediaType);
+    }
+
+    var inspected = await Pt2xInspector.InspectAsync(bytes, filename!, request.HttpContext.RequestAborted);
+    if (!inspected.Success)
+    {
+        return Results.Json(
+            new { error = inspected.Error ?? "The project could not be opened.", report = inspected.Report },
+            statusCode: StatusCodes.Status422UnprocessableEntity);
+    }
+
+    return Results.Text(inspected.Json!, "application/json");
+});
+
 app.Run();
 
 static bool TryResolveDirs(HttpRequest request, out string output, out string status, out string? error)

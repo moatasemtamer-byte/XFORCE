@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckGlyph,
@@ -51,7 +52,7 @@ interface ConvertResult {
 const TIA_VERSIONS = [16, 17, 18, 19, 20];
 const DEFAULT_CPU_ORDER_NUMBER = "6ES7 515-2AM01-0AB0/V2.0";
 
-const ACCEPT = ".pdf,.lpt,.txt,.xml,.zip,.ap16,.ap17,.ap18,.ap19,.ap20";
+const ACCEPT = ".pdf,.lpt,.txt,.xml,.pt2,.pt2x,.zip,.ap16,.ap17,.ap18,.ap19,.ap20";
 
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
@@ -86,7 +87,16 @@ function download(artifact: Artifact) {
   URL.revokeObjectURL(url);
 }
 
+// Stashes a freshly built .pt2x in sessionStorage so the project viewer can
+// decompile and render it without the user re-uploading the file.
+function stashForViewer(artifact: Artifact) {
+  if (!artifact.contentBase64) return false;
+  sessionStorage.setItem("msw-pt2x-view", JSON.stringify({ name: artifact.name, base64: artifact.contentBase64 }));
+  return true;
+}
+
 export function EngineConvertForm({ error: engineError }: { error: string | null }) {
+  const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [dptFile, setDptFile] = useState<File | null>(null);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -590,6 +600,24 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
                       {artifact.name}
                     </NxButton>
                   ))}
+                  {(result.artifacts ?? [])
+                    .filter((a) => /\.pt2x?$/i.test(a.name) && a.contentBase64)
+                    .map((artifact) => (
+                      <NxButton
+                        key={`view-${artifact.name}`}
+                        variant="primary"
+                        onClick={() => {
+                          if (stashForViewer(artifact)) router.push("/engine/viewer");
+                        }}
+                        className="text-xs"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" strokeLinecap="round" strokeLinejoin="round" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                        Open in viewer
+                      </NxButton>
+                    ))}
                 </div>
                 {result.summary && Object.keys(result.summary).length > 0 ? (
                   <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-3">

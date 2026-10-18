@@ -27,7 +27,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "pt2conv - XML -> .pt2x converter";
+        Text = "pt2conv - TriStation XML <-> .pt2x";
         Width = 980;
         Height = 760;
         MinimumSize = new Size(760, 580);
@@ -43,7 +43,15 @@ public sealed class MainForm : Form
             Panel2MinSize = 140,
         };
 
-        split.Panel1.Controls.Add(BuildConvertPanel());
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var tabFwd = new TabPage { Text = "XML -> .pt2x  (convert)", Padding = new Padding(0) };
+        tabFwd.Controls.Add(BuildConvertPanel());
+        var tabRev = new TabPage { Text = ".pt2x -> XML  (decompile)", Padding = new Padding(0) };
+        tabRev.Controls.Add(BuildDecompilePanel());
+        tabs.TabPages.Add(tabFwd);
+        tabs.TabPages.Add(tabRev);
+
+        split.Panel1.Controls.Add(tabs);
         split.Panel2.Controls.Add(BuildOutputPanel());
 
         var strip = new StatusStrip { Dock = DockStyle.Fill, SizingGrip = false };
@@ -56,7 +64,7 @@ public sealed class MainForm : Form
         root.Controls.Add(strip, 0, 1);
         Controls.Add(root);
 
-        AppendLine("pt2conv - XML -> .pt2x converter ready.");
+        AppendLine("pt2conv - TriStation XML <-> .pt2x converter ready.");
     }
 
     // ---------------------------------------------------------------- layout helpers
@@ -280,6 +288,57 @@ public sealed class MainForm : Form
             if (fl.Length > 0) { if (args.Count == 3) args.Add(""); args.Add(fl); }
             if (regenTags.Checked || rd.Length == 0) { if (args.Count == 3) args.Add(""); args.Add("--tags"); }
             return args.ToArray();
+        }, prominent: true);
+        return page;
+    }
+
+    // ---------------------------------------------------------------- Decompile (reverse)
+
+    private Control BuildDecompilePanel()
+    {
+        var page = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        var tlp = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            Padding = new Padding(16),
+            GrowStyle = TableLayoutPanelGrowStyle.AddRows,
+        };
+        tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+        page.Controls.Add(tlp);
+
+        int row = 0;
+        var title = new Label
+        {
+            Text = "Decompile .pt2x -> XML",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 13f, FontStyle.Bold),
+            Margin = new Padding(3, 3, 3, 6),
+        };
+        tlp.Controls.Add(title, 0, row);
+        tlp.SetColumnSpan(title, 3);
+        row++;
+
+        AddDescription(tlp, ref row,
+            "Read a TriStation .pt2/.pt2x container and write it back out as PLCopen XML. " +
+            "POU logic comes back as <FBD> graphs (blocks, wires, comments) or <ST> source, and the full tag " +
+            "table is emitted with types, addresses and descriptions. " +
+            "This runs entirely inside the tool - no TriStation installation and no licence are needed. " +
+            "The XML it writes can be edited, inspected, or re-converted on the other tab.");
+
+        var pt2 = AddPathRow(tlp, ref row, "TriStation .pt2x", Pt2xFilter, PathMode.OpenFile);
+        var xmlOut = AddPathRow(tlp, ref row, "Output XML", XmlFilter, PathMode.SaveFile);
+
+        AddRunRow(tlp, ref row, "Decompile .pt2x to XML", () =>
+        {
+            string src = Req(pt2.Text, "TriStation .pt2x");
+            string dst = Req(xmlOut.Text, "output XML path");
+            if (!File.Exists(src))
+                throw new InvalidOperationException("File not found:\n" + src);
+            if (!dst.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) dst += ".xml";
+            return new[] { "frompt2", src, dst };
         }, prominent: true);
         return page;
     }

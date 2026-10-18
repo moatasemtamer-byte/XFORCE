@@ -27,6 +27,7 @@ public static class Program
                 "buildxml" => BuildXml.Run(args),
                 "fromsimatic" => SimaticToPlcOpen.Run(args),
                 "frompt2" => FromPt2.Run(args),
+                "tojson" => FromPt2.ToJson(args),
                 "genfbd" => FbdGenerator.Run(args),
                 "genst" => StGenerator.Run(args),
                 "gendoc" => DocGenerator.Run(args),
@@ -99,8 +100,11 @@ Commands:
                                        With no <refExtractDir>, uses the embedded generic base.
   fromsimatic <dir|file> <out.xml>     Translate SimaticML block exports (FBD) + tag table into
                                        the TriStation PLCopen XML that buildxml consumes.
-  frompt2 <project.pt2x> <out.xml>     [WIP] Decompile a TriStation .pt2/.pt2x container (.FBD/.ST
+  frompt2 <project.pt2x> <out.xml>     Decompile a TriStation .pt2/.pt2x container (.FBD/.ST
                                        POU streams + Tagnames.csv) into TriStation PLCopen XML.
+                                       In-process: needs no TriStation installation or licence.
+  tojson <project.pt2x> <out.json>     Decompile a TriStation .pt2/.pt2x container to a JSON model
+                                       (POUs, vars, FBD sheets/wires, tags) for the web viewer.
   genfbd <xml> <pouName> <out.FBD>     Generate one FBD container stream from a PLCopen-XML POU.
   genst  <xml> <pouName> <out.ST>      Generate one ST container stream (CDATA + CRLF) from a PLCopen-XML POU.
   gendoc <xml> <pouName> <out.DOC>      Generate one CTS2Doc container stream from a PLCopen-XML POU.

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 using Pt2Conv.Cfb;
 
@@ -79,6 +80,134 @@ public sealed class FromPt2
         Console.WriteLine($"Wrote {outPath} ({xml.Length:N0} chars): {pouCount} POU(s), {tags.Count} tag(s)");
         return 0;
     }
+
+    /// <summary>Serializes the decompiled project (POUs, interface variables, FBD sheets with
+    /// geometry and wires, global tags) to a JSON model consumed by the web PT2X viewer.</summary>
+    public static int ToJson(string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("usage: tojson <project.pt2x> <out.json>");
+            Console.Error.WriteLine("  <project.pt2x>: a TriStation .pt2/.pt2x project container");
+            return 1;
+        }
+
+        string input = args[1], outPath = args[2];
+
+        var cf = CompoundFile.Open(input);
+        var streams = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in cf.ListStreams()) streams[s.Path] = s.Data;
+
+        var tags = LoadTags(streams);
+        var self = new FromPt2(streams, tags);
+        string projName = self.ProjectName() ?? Path.GetFileNameWithoutExtension(input);
+
+        var blocks = new List<Pt2Block>();
+        foreach (var folder in self.PouFolders())
+        {
+            try
+            {
+                var block = self.ReadPou(folder);
+                if (block != null) blocks.Add(block);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"  {folder}: {ex.Message}");
+            }
+        }
+
+        self.CollectReferencedGlobals(blocks);
+
+        var pous = blocks
+            .Where(b => b.Sheets.Count > 0 || b.St != null)
+            .Select(b => new
+            {
+                name = b.Name,
+                pouType = b.PouType,
+                returnType = b.ReturnType,
+                title = b.Title,
+                vars = b.Vars.Select(v => new
+                {
+                    name = v.Name,
+                    dataType = v.DataType,
+                    init = v.Init,
+                    desc = v.Desc,
+                    section = v.Section,
+                    isInstance = v.IsInstance,
+                }).ToArray(),
+                referencedGlobals = b.ReferencedGlobals.ToArray(),
+                st = b.St,
+                sheets = b.Sheets.Select(s => new
+                {
+                    number = s.Number,
+                    title = s.Title,
+                    elems = s.Elems.Select(ElemJson).ToArray(),
+                    wires = s.Wires.Select(w => new
+                    {
+                        id = w.OldId,
+                        srcId = w.SrcId,
+                        srcPin = w.SrcPin,
+                        sinkId = w.SinkId,
+                        sinkPin = w.SinkPin,
+                    }).ToArray(),
+                }).ToArray(),
+            })
+            .ToArray();
+
+        var payload = new
+        {
+            projectName = projName,
+            pouCount = pous.Length,
+            tagCount = tags.Count,
+            pous,
+            tags = tags.Select(t => new { name = t.Name, type = t.Type, desc = t.Desc, address = t.Address }).ToArray(),
+        };
+
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        File.WriteAllText(outPath, json, new UTF8Encoding(false));
+        Console.WriteLine($"Wrote {outPath}: {pous.Length} POU(s), {tags.Count} tag(s)");
+        return 0;
+    }
+
+    private static object ElemJson(Pt2Elem e) => e switch
+    {
+        Pt2BlockElem b => new
+        {
+            kind = "block",
+            id = b.OldId,
+            x = b.X,
+            y = b.Y,
+            w = b.W,
+            h = b.H,
+            typeName = b.TypeName,
+            instance = b.Instance,
+            inputs = b.Inputs.Select(p => new { name = p.Name, wire = p.Wire }).ToArray(),
+            outputs = b.Outputs.ToArray(),
+        },
+        Pt2VarElem v => new
+        {
+            kind = "var",
+            id = v.OldId,
+            x = v.X,
+            y = v.Y,
+            w = v.W,
+            h = v.H,
+            name = v.Name,
+            inWire = v.InWire,
+            outWire = v.OutWire,
+        },
+        Pt2CommentElem c => new
+        {
+            kind = "comment",
+            id = c.OldId,
+            x = c.X,
+            y = c.Y,
+            w = c.W,
+            h = c.H,
+            text = c.Text,
+        },
+        _ => new { kind = "unknown", id = e.OldId, x = e.X, y = e.Y, w = e.W, h = e.H },
+    };
 
     // ---------------------------------------------------------------- container
 

@@ -16,6 +16,7 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { href: "/engine/convert", label: "Convert", ready: true },
+  { href: "/engine/viewer", label: "Project viewer", ready: true },
   { href: "/engine", label: "Dashboard", ready: true },
   { href: "/engine/report", label: "Report", ready: false },
   { href: "/engine/library", label: "Library calls", ready: false },
