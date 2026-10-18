@@ -44,6 +44,8 @@ internal static class Program
             PlcCpu = options.PlcCpu,
             MappingsPath = options.Mappings,
             ValidateOnly = options.ValidateOnly,
+            FbdOutput = options.FbdOutput,
+            FbdDialect = options.FbdDialect,
         };
 
         ConversionResult result;

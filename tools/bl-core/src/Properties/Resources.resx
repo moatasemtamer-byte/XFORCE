@@ -1,0 +1,526 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- 
+    Microsoft ResX Schema 
+    
+    Version 2.0
+    
+    The primary goals of this format is to allow a simple XML format 
+    that is mostly human readable. The generation and parsing of the 
+    various data types are done through the TypeConverter classes 
+    associated with the data types.
+    
+    Example:
+    
+    ... ado.net/XML headers & schema ...
+    <resheader name="resmimetype">text/microsoft-resx</resheader>
+    <resheader name="version">2.0</resheader>
+    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+        <value>[base64 mime encoded serialized .NET Framework object]</value>
+    </data>
+    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+        <comment>This is a comment</comment>
+    </data>
+                
+    There are any number of "resheader" rows that contain simple 
+    name/value pairs.
+    
+    Each data row contains a name, and value. The row also contains a 
+    type or mimetype. Type corresponds to a .NET class that support 
+    text/value conversion through the TypeConverter architecture. 
+    Classes that don't support this are serialized and stored with the 
+    mimetype set.
+    
+    The mimetype is used for serialized objects, and tells the 
+    ResXResourceReader how to depersist the object. This is currently not 
+    extensible. For a given mimetype the value must be set accordingly:
+    
+    Note - application/x-microsoft.net.object.binary.base64 is the format 
+    that the ResXResourceWriter will generate, however the reader can 
+    read any of the formats listed below.
+    
+    mimetype: application/x-microsoft.net.object.binary.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+            : and then encoded with base64 encoding.
+    
+    mimetype: application/x-microsoft.net.object.soap.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+            : and then encoded with base64 encoding.
+
+    mimetype: application/x-microsoft.net.object.bytearray.base64
+    value   : The object must be serialized into a byte array 
+            : using a System.ComponentModel.TypeConverter
+            : and then encoded with base64 encoding.
+    -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="ComparingMsg" xml:space="preserve">
+    <value>Comparing the Duplicated unit with the Modified Excel File in Progress</value>
+  </data>
+  <data name="DragError" xml:space="preserve">
+    <value>The Dragged File not recognized by Converter</value>
+  </data>
+  <data name="DumpExcelIntialName" xml:space="preserve">
+    <value>Please select file name for the Dump File then Please wait, Dumping the XML File on progress...</value>
+  </data>
+  <data name="DuplicationMsg" xml:space="preserve">
+    <value>Duplication of the original unit in Progress Please wait...</value>
+  </data>
+  <data name="EditModExcelMsg" xml:space="preserve">
+    <value>Please Edit the new values of the new Unit in the Created file then Load the edited file by Click on:</value>
+  </data>
+  <data name="ImportCancelMsg" xml:space="preserve">
+    <value>The Loading process has been cancelled!</value>
+  </data>
+  <data name="ImportFail" xml:space="preserve">
+    <value>Loading Process Failed:</value>
+  </data>
+  <data name="ImportModExcelMsg" xml:space="preserve">
+    <value>Load The Mod Excel has been Cancelled! </value>
+  </data>
+  <data name="ImportOrgXMLMsg" xml:space="preserve">
+    <value>Please select the back documentation XML file of the original unit</value>
+  </data>
+  <data name="ModExcelCaption" xml:space="preserve">
+    <value>Load &amp; Deploy:Load Mod Excel button</value>
+  </data>
+  <data name="BL_AND_Comm" xml:space="preserve">
+    <value>+</value>
+  </data>
+  <data name="BL_AND_VisioComm" xml:space="preserve">
+    <value>&amp;</value>
+  </data>
+  <data name="BL_MacroLoop_ExcelPath" xml:space="preserve">
+    <value>\InstanceRuleset\MacroLoop.xlsx</value>
+  </data>
+  <data name="BL_MacroLoop_HeaderProp" xml:space="preserve">
+    <value>MACROLOOP</value>
+  </data>
+  <data name="BL_MacroLoop_SheetName" xml:space="preserve">
+    <value>MacroLoop</value>
+  </data>
+  <data name="BL_PROP_VisioProp" xml:space="preserve">
+    <value>PROP</value>
+  </data>
+  <data name="BL_REPLACE_Comm" xml:space="preserve">
+    <value>REPLACE</value>
+  </data>
+  <data name="BL_ReplicationBlocknameColName" xml:space="preserve">
+    <value>Blockname</value>
+  </data>
+  <data name="BL_ReplicationBlockOrderCol" xml:space="preserve">
+    <value>BlockOrder</value>
+  </data>
+  <data name="BL_ReplicationCompoundName" xml:space="preserve">
+    <value>Compound</value>
+  </data>
+  <data name="BL_ReplicationCompoundNamecol" xml:space="preserve">
+    <value>CompoundName</value>
+  </data>
+  <data name="BL_ReplicationCompoundOrder" xml:space="preserve">
+    <value>CompoundOrder</value>
+  </data>
+  <data name="BL_ReplicationConnectionType" xml:space="preserve">
+    <value>ConnectionType</value>
+  </data>
+  <data name="BL_ReplicationContainedName" xml:space="preserve">
+    <value>ContainedName</value>
+  </data>
+  <data name="BL_ReplicationContainerAttribute" xml:space="preserve">
+    <value>Container</value>
+  </data>
+  <data name="BL_ReplicationContainerInputOutput" xml:space="preserve">
+    <value>InputOutput</value>
+  </data>
+  <data name="BL_ReplicationContainerStrategy" xml:space="preserve">
+    <value>ContainerStrategy</value>
+  </data>
+  <data name="BL_ReplicationControllerName" xml:space="preserve">
+    <value>ControllerName</value>
+  </data>
+  <data name="BL_ReplicationCreationMsg" xml:space="preserve">
+    <value>Dump File Created on Path:</value>
+  </data>
+  <data name="BL_ReplicationCreationSuccessMsg" xml:space="preserve">
+    <value>Created Successfully</value>
+  </data>
+  <data name="BL_ReplicationCurrentExecutionOrderCol" xml:space="preserve">
+    <value>Current ExecutionOrder</value>
+  </data>
+  <data name="BL_ReplicationDEV_IDAttribute" xml:space="preserve">
+    <value>DEV_ID</value>
+  </data>
+  <data name="BL_ReplicationDirectAceessHWFileName" xml:space="preserve">
+    <value>HWonly_DA.xml</value>
+  </data>
+  <data name="BL_ReplicationDirectAceessHW_SWFileName" xml:space="preserve">
+    <value>HWSWCombined_DA.xml</value>
+  </data>
+  <data name="BL_ReplicationDirectAceessSWFileName" xml:space="preserve">
+    <value>SWonly_DA.xml</value>
+  </data>
+  <data name="BL_ReplicationDVNAMEAttribute" xml:space="preserve">
+    <value>DVNAME</value>
+  </data>
+  <data name="BL_ReplicationECBColName" xml:space="preserve">
+    <value>ECBName</value>
+  </data>
+  <data name="BL_ReplicationECBcompoundColName" xml:space="preserve">
+    <value>ECBcompound</value>
+  </data>
+  <data name="BL_ReplicationECBCreationFailMsg" xml:space="preserve">
+    <value>ECB Creation Failed: the new ECBName is repeated with Existing/created ECB or not in proper format</value>
+  </data>
+  <data name="BL_ReplicationECBHorizontalSheetName" xml:space="preserve">
+    <value>ECBHorizontal</value>
+  </data>
+  <data name="BL_ReplicationFailInd" xml:space="preserve">
+    <value>Failed</value>
+  </data>
+  <data name="BL_ReplicationFailMsg" xml:space="preserve">
+    <value>Duplication Failed: </value>
+  </data>
+  <data name="BL_ReplicationFBMName" xml:space="preserve">
+    <value>FBMName</value>
+  </data>
+  <data name="BL_ReplicationFolderName" xml:space="preserve">
+    <value>\ReplicatedOutput</value>
+  </data>
+  <data name="BL_ReplicationInProgressMsg" xml:space="preserve">
+    <value>Please wait :Duplication in Progress...</value>
+  </data>
+  <data name="BL_ReplicationIODecleration" xml:space="preserve">
+    <value>IODecleration</value>
+  </data>
+  <data name="BL_ReplicationIODeclerationName" xml:space="preserve">
+    <value>IODeclerationName</value>
+  </data>
+  <data name="BL_ReplicationIODeclerationType" xml:space="preserve">
+    <value>IODeclerationType</value>
+  </data>
+  <data name="BL_ReplicationIODeclerationValue" xml:space="preserve">
+    <value>IODeclerationValue</value>
+  </data>
+  <data name="BL_ReplicationLockStatus" xml:space="preserve">
+    <value>LockStatus</value>
+  </data>
+  <data name="BL_ReplicationMyContainerAttribute" xml:space="preserve">
+    <value>MyContainer</value>
+  </data>
+  <data name="BL_ReplicationNameAttribute" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="BL_ReplicationNewBlockValueCol" xml:space="preserve">
+    <value>NewBlockValue</value>
+  </data>
+  <data name="BL_ReplicationNewCompoundName" xml:space="preserve">
+    <value>NewCompoundName</value>
+  </data>
+  <data name="BL_ReplicationNEWDEV_IDcol" xml:space="preserve">
+    <value>NEWDEV_ID</value>
+  </data>
+  <data name="BL_ReplicationNewECBColName" xml:space="preserve">
+    <value>NEWECBName</value>
+  </data>
+  <data name="BL_ReplicationNewIODeclerationName" xml:space="preserve">
+    <value>NewIODeclerationName</value>
+  </data>
+  <data name="BL_ReplicationNewIODeclerationvalue" xml:space="preserve">
+    <value>NewIODeclerationvalue</value>
+  </data>
+  <data name="BL_ReplicationNewParameterValue" xml:space="preserve">
+    <value>NewParameterValue</value>
+  </data>
+  <data name="BL_ReplicationNewStrategyValue" xml:space="preserve">
+    <value>NewStrategyValue</value>
+  </data>
+  <data name="BL_ReplicationNot_CreatedInd" xml:space="preserve">
+    <value>Not Created</value>
+  </data>
+  <data name="BL_ReplicationParameterName" xml:space="preserve">
+    <value>ParameterName</value>
+  </data>
+  <data name="BL_ReplicationParameterValue" xml:space="preserve">
+    <value>ParameterValue</value>
+  </data>
+  <data name="BL_ReplicationPARENTAttribute" xml:space="preserve">
+    <value>PARENT</value>
+  </data>
+  <data name="BL_ReplicationPRIMARY_ECBAttribute" xml:space="preserve">
+    <value>PRIMARY_ECB</value>
+  </data>
+  <data name="BL_ReplicationSelectionErrorMsg" xml:space="preserve">
+    <value>The Selected File is not Control XML file,Please select proper File for Replication Module</value>
+  </data>
+  <data name="BL_ReplicationStrategyCreationResultCol" xml:space="preserve">
+    <value>Strategy Creation Result</value>
+  </data>
+  <data name="BL_ReplicationStrategyName" xml:space="preserve">
+    <value>Strategy</value>
+  </data>
+  <data name="BL_ReplicationStrategyOrder" xml:space="preserve">
+    <value>StrategyOrder</value>
+  </data>
+  <data name="BL_ReplicationStrategyType" xml:space="preserve">
+    <value>StrategyType</value>
+  </data>
+  <data name="BL_ReplicationSubStrategy" xml:space="preserve">
+    <value>SubStrategy</value>
+  </data>
+  <data name="BL_ReplicationSuccessMsg" xml:space="preserve">
+    <value>Duplication Succeeded output Files Created on Path:</value>
+  </data>
+  <data name="BL_ReplicationTemplateName" xml:space="preserve">
+    <value>Template</value>
+  </data>
+  <data name="BL_ReplicationTypeColName" xml:space="preserve">
+    <value>Type</value>
+  </data>
+  <data name="BL_ReplicationValidationCreationMsg" xml:space="preserve">
+    <value>Validation Files Created on Path:</value>
+  </data>
+  <data name="BL_ReplicationValidationFileName" xml:space="preserve">
+    <value>_Validation.xlsx</value>
+  </data>
+  <data name="BL_ReplicationVerticalParametersSheetName" xml:space="preserve">
+    <value>VerticalParameters</value>
+  </data>
+  <data name="BL_ReplicationVerticalstratgiesSheetName" xml:space="preserve">
+    <value>Verticalstratgies</value>
+  </data>
+  <data name="BL_XMLAttribute_Block" xml:space="preserve">
+    <value>Block</value>
+  </data>
+  <data name="BL_XMLAttribute_CustomProperty" xml:space="preserve">
+    <value>CustomProperty</value>
+  </data>
+  <data name="BL_XMLAttribute_Expression" xml:space="preserve">
+    <value>Expression</value>
+  </data>
+  <data name="BL_XMLAttribute_Instance" xml:space="preserve">
+    <value>Instance</value>
+  </data>
+  <data name="BL_XMLAttribute_Name" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="BL_XMLAttribute_Template" xml:space="preserve">
+    <value>Template</value>
+  </data>
+  <data name="BL_FileOperations_ControlfileLoadedMsg" xml:space="preserve">
+    <value> :Has been loaded </value>
+  </data>
+  <data name="BL_FileOperations_ControlSchema" xml:space="preserve">
+    <value>urn:ControlElementsSchema</value>
+  </data>
+  <data name="BL_FileOperations_CustomTabError" xml:space="preserve">
+    <value>:Can't be loaded in the Custom Tab </value>
+  </data>
+  <data name="BL_FileOperations_DragErrorMsg" xml:space="preserve">
+    <value>The Dragged File not recognized by Converter</value>
+  </data>
+  <data name="BL_FileOperations_InstrumentColName" xml:space="preserve">
+    <value>Column</value>
+  </data>
+  <data name="BL_FileOperations_InstrumentIndexTabName" xml:space="preserve">
+    <value>InstrumentIndex</value>
+  </data>
+  <data name="BL_FileOperations_InstrumentTabError" xml:space="preserve">
+    <value> :Can't be loaded in the Instrument Tab</value>
+  </data>
+  <data name="BL_FileOperations_MacroLoopNameCol" xml:space="preserve">
+    <value>Macro Loop Name</value>
+  </data>
+  <data name="BL_FileOperations_Schneider_attribute" xml:space="preserve">
+    <value>Schneider</value>
+  </data>
+  <data name="BL_FileOperations_SignatureError" xml:space="preserve">
+    <value>:Can't be loaded in the Signature Tab</value>
+  </data>
+  <data name="BL_FileOperations_Strategycol" xml:space="preserve">
+    <value>Strategy</value>
+  </data>
+  <data name="BL_FileOperations_Triconex_attribute" xml:space="preserve">
+    <value>triconex</value>
+  </data>
+  <data name="BL_FileOperations_Tristation_attribute" xml:space="preserve">
+    <value>Tristation</value>
+  </data>
+  <data name="BL_FileOperations_WiringIndexTabName" xml:space="preserve">
+    <value>WiringIndex</value>
+  </data>
+  <data name="BL_FileOperations_ReplicationloadError" xml:space="preserve">
+    <value>:Can't be loaded</value>
+  </data>
+  <data name="BL_FileOperations_ReplicationResetMsg" xml:space="preserve">
+    <value>The replication has been Reseted and you can select new file to the original unit</value>
+  </data>
+  <data name="BL_FileOperations_ReplicationSaveMsg" xml:space="preserve">
+    <value>  file will be loaded in the next session automatically</value>
+  </data>
+  <data name="BL_InfoFile_ReplicationProgrammer" xml:space="preserve">
+    <value> Tamer Omran   Email:Tamer.Omran@schneider-electric.com</value>
+  </data>
+  <data name="BL_InfoFile_TechConsultantTitle" xml:space="preserve">
+    <value>Technical Consultant:</value>
+  </data>
+  <data name="BL_ReplicationProgramsheetName" xml:space="preserve">
+    <value>Program</value>
+  </data>
+  <data name="BL_ReplicationSafetyBlockSheetName" xml:space="preserve">
+    <value>Blocks</value>
+  </data>
+  <data name="BL_ReplicationSafetyCommentSheetName" xml:space="preserve">
+    <value>Comment</value>
+  </data>
+  <data name="BL_ReplicationSafetyIODeclerationSheetName" xml:space="preserve">
+    <value>Variables</value>
+  </data>
+  <data name="BL_ReplicationSafetyPT2FileName" xml:space="preserve">
+    <value>_Replicated.PT2</value>
+  </data>
+  <data name="BL_ReplicationSafetyTemplateSheetName" xml:space="preserve">
+    <value>Sheets</value>
+  </data>
+  <data name="BL_ReplicationSafetyXmlFileName" xml:space="preserve">
+    <value>_Replicated.xml</value>
+  </data>
+  <data name="BL_SafetyReplicationBlockNamcol" xml:space="preserve">
+    <value>Block Name</value>
+  </data>
+  <data name="BL_SafetyReplicationCommentIDNamcol" xml:space="preserve">
+    <value>Comment ID</value>
+  </data>
+  <data name="BL_SafetyReplicationCommentNamcol" xml:space="preserve">
+    <value>Comment Value</value>
+  </data>
+  <data name="BL_SafetyReplicationDiscriptionoDeclerationNamcol" xml:space="preserve">
+    <value>Description</value>
+  </data>
+  <data name="BL_SafetyReplicationIoDeclerationNamcol" xml:space="preserve">
+    <value>Varaiables Name</value>
+  </data>
+  <data name="BL_SafetyReplicationNewBlockNamcol" xml:space="preserve">
+    <value>New Block Name</value>
+  </data>
+  <data name="BL_SafetyReplicationNewCommentNamcol" xml:space="preserve">
+    <value>New Comment Value</value>
+  </data>
+  <data name="BL_SafetyReplicationNewDiscriptionoDeclerationNamcol" xml:space="preserve">
+    <value>New Description</value>
+  </data>
+  <data name="BL_SafetyReplicationNewIoDeclerationNamcol" xml:space="preserve">
+    <value>New Variable Name</value>
+  </data>
+  <data name="BL_SafetyReplicationNewProgramNamcol" xml:space="preserve">
+    <value>New Program Name</value>
+  </data>
+  <data name="BL_SafetyReplicationNewSheetsNamcol" xml:space="preserve">
+    <value>New Sheets Name</value>
+  </data>
+  <data name="BL_SafetyReplicationProgramNamcol" xml:space="preserve">
+    <value>Program Name</value>
+  </data>
+  <data name="BL_SafetyReplicationSheetNumbercol" xml:space="preserve">
+    <value>Sheet Number</value>
+  </data>
+  <data name="BL_SafetyReplicationSheetsNamcol" xml:space="preserve">
+    <value>Sheets Name</value>
+  </data>
+  <data name="BL_SafetyReplicationTypeBlockNamcol" xml:space="preserve">
+    <value>Block Type</value>
+  </data>
+  <data name="BL_SafetyReplicationTypeIoDeclerationNamcol" xml:space="preserve">
+    <value>Variable Type</value>
+  </data>
+  <data name="BL_ReplicationSuccessbutAPIFailMsg" xml:space="preserve">
+    <value>Failed to Convert the PT2 file but the new unit has been created as XML file output Files Created on Path:</value>
+  </data>
+  <data name="BL_SafetyReplicationAPIFail" xml:space="preserve">
+    <value>Failed to Convert the PT2 file</value>
+  </data>
+  <data name="BL_SafetyReplicationToExcelInProgress" xml:space="preserve">
+    <value>Reading the PT2 Data into Exel in Progress Please Wait:</value>
+  </data>
+  <data name="BL_SafetyReplicationSelectionErrorMsg" xml:space="preserve">
+    <value>The Selected File is not Safety XML file,Please select proper File for Replication Module</value>
+  </data>
+  <data name="BL_ReplicationPORTNOAttribute" xml:space="preserve">
+    <value>PORTNO</value>
+  </data>
+  <data name="BL_ReplicationRulebookLogFileName" xml:space="preserve">
+    <value>MismatchLog.txt</value>
+  </data>
+  <assembly alias="System.Windows.Forms" name="System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" />
+  <data name="BlankRuleset" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\BlankRuleset.xml;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
+  </data>
+  <data name="DefaultXMLExt" xml:space="preserve">
+    <value>.xml</value>
+  </data>
+  <data name="XMLExt" xml:space="preserve">
+    <value>XML Files (*.xml)|*.xml|PT2 Files (*.PT2)|*.PT2</value>
+  </data>
+</root>

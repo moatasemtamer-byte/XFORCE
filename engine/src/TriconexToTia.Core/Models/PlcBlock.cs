@@ -29,4 +29,16 @@ public abstract class PlcBlock
     public abstract BlockType BlockType { get; }
 
     public string? Comment { get; set; }
+
+    /// <summary>POU version attribute from the source, e.g. "1.19".</summary>
+    public string? Version { get; set; }
+
+    /// <summary>Body of the block: verbatim text or a resolved FBD graph.</summary>
+    public LogicModel? Logic { get; set; }
+
+    /// <summary>ts:POU_EXT/@ApplicationType, e.g. "SAFETY and CONTROL".</summary>
+    public string? ApplicationType { get; set; }
+
+    /// <summary>Instance names of the function blocks called from this block.</summary>
+    public List<string> CalledInstances { get; } = new();
 }

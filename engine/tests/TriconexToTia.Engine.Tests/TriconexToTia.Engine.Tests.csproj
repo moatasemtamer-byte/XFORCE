@@ -15,6 +15,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\TriconexToTia.Engine\TriconexToTia.Engine.csproj" />
+    <ProjectReference Include="..\..\src\TriconexToTia.Generators\TriconexToTia.Generators.csproj" />
+    <ProjectReference Include="..\..\src\TriconexToTia.Status\TriconexToTia.Status.csproj" />
   </ItemGroup>
 
 </Project>

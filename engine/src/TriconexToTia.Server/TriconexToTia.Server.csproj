@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TriconexToTia.Engine\TriconexToTia.Engine.csproj" />
+    <ProjectReference Include="..\TriconexToTia.Status\TriconexToTia.Status.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

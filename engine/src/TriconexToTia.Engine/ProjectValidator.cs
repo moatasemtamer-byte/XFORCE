@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using TriconexToTia.Core.Enums;
 using TriconexToTia.Core.Models;
 using TriconexToTia.Core.Results;
+using TriconexToTia.Generators;
 using TriconexToTia.Mapper;
 
 namespace TriconexToTia.Engine;
@@ -48,6 +49,7 @@ public sealed class ProjectValidator
         CheckDuplicateVariables(project, result);
         CheckEmptyBlocks(project, result);
         CheckNonTextLanguages(project, result);
+        CheckDanglingSignals(project, result);
         CollectUnrecognizedElements(project, result);
 
         return result;
@@ -62,9 +64,18 @@ public sealed class ProjectValidator
         foreach (var group in groups)
         {
             var first = group.First();
-            result.Add(ValidationIssue.Fatal(
-                $"Duplicate block name \"{group.Key}\" ({group.Count()} definitions).",
-                first.SourceLine));
+
+            // Siemens block names are case-insensitive. Case-insensitive duplicates that nothing
+            // references from SCL text are renamed automatically before validation; this warning is
+            // only reached for a duplicate whose name appears in SCL text, where the reference cannot
+            // be rewritten safely.
+            result.Add(ValidationIssue.Warning(
+                $"Block name \"{group.Key}\" ({group.Count()} definitions: " +
+                string.Join(", ", group.Select(block => $"\"{block.Name}\"")) +
+                ") is case-insensitively ambiguous and is referenced from SCL text. Rename one block " +
+                "in the source system; Siemens keeps only one of them.",
+                first.SourceLine,
+                first.Name));
         }
     }
 
@@ -74,13 +85,22 @@ public sealed class ProjectValidator
         {
             foreach (var variable in block.Variables)
             {
-                if (!IsKnownType(variable.TypeName))
-                {
-                    result.Add(ValidationIssue.Fatal(
+                if (IsKnownType(variable.TypeName)) continue;
+
+                // <derived name="..."/> references a function block or data type that is not part of
+                // this export. TriStation library blocks (R_TRIG, TMR, ...) have no SCL equivalent,
+                // so this is a manual task rather than a fatal error.
+                result.Add(variable.IsDerivedType
+                    ? ValidationIssue.Warning(
+                        $"Variable \"{variable.Name}\" in block \"{block.Name}\" is an instance of " +
+                        $"\"{variable.TypeName}\", which is not defined in this export. Provide the " +
+                        "Siemens equivalent library block or convert it by hand.",
+                        variable.SourceLine,
+                        block.Name)
+                    : ValidationIssue.Fatal(
                         $"Variable \"{variable.Name}\" in block \"{block.Name}\" uses undefined type \"{variable.TypeName}\".",
                         variable.SourceLine,
                         block.Name));
-                }
             }
 
             if (block is Function function && !string.IsNullOrWhiteSpace(function.ReturnType)
@@ -140,31 +160,111 @@ public sealed class ProjectValidator
     {
         foreach (var block in project.Blocks)
         {
-            if (string.IsNullOrWhiteSpace(block.Code))
+            var isEmpty = block.Logic switch
             {
-                result.Add(ValidationIssue.Warning(
-                    $"Block \"{block.Name}\" has no code. An empty block was generated.",
-                    block.SourceLine,
-                    block.Name));
-            }
+                TextualLogic textual => string.IsNullOrWhiteSpace(textual.Code),
+                StructuredLogic structured => structured.Items.Count == 0,
+                null => string.IsNullOrWhiteSpace(block.Code),
+                _ => false,
+            };
+
+            if (!isEmpty) continue;
+
+            result.Add(ValidationIssue.Warning(
+                $"Block \"{block.Name}\" has no code. An empty block was generated.",
+                block.SourceLine,
+                block.Name));
         }
     }
 
     /// <summary>
-    /// FBD, LD and SFC bodies cannot be carried into SCL verbatim, so the
-    /// conversion is attempted but must be verified by hand.
+    /// FBD networks are reconstructed into SCL from the resolved connection graph, LD and SFC
+    /// bodies are carried over verbatim. Both must be checked by an engineer because the
+    /// generated code is not a line-by-line copy of the source.
     /// </summary>
     private static void CheckNonTextLanguages(PlcProject project, ValidationResult result)
     {
         foreach (var block in project.Blocks)
         {
-            if (block.Language is not (PlcLanguage.FBD or PlcLanguage.LD or PlcLanguage.SFC))
+            switch (block.Language)
             {
-                continue;
+                case PlcLanguage.FBD:
+                    result.Add(ValidationIssue.Warning(
+                        $"Block \"{block.Name}\" is an FBD diagram. SCL was generated from the resolved " +
+                        "connection graph; verify the logic against the TriStation diagram.",
+                        block.SourceLine,
+                        block.Name));
+                    break;
+                case PlcLanguage.LD:
+                case PlcLanguage.SFC:
+                    result.Add(ValidationIssue.Warning(
+                        $"Block \"{block.Name}\" is written in {block.Language} and has no SCL equivalent. " +
+                        "The original diagram XML is written next to the generated block; recreate it in TIA Portal.",
+                        block.SourceLine,
+                        block.Name));
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A signal that no call consumes and no assignment writes is either dead logic or a wiring
+    /// the reader failed to resolve, so both cases are reported.
+    /// </summary>
+    private void CheckDanglingSignals(PlcProject project, ValidationResult result)
+    {
+        foreach (var block in project.Blocks)
+        {
+            if (block.Logic is not StructuredLogic logic) continue;
+
+            var consumed = new HashSet<string>(StringComparer.Ordinal);
+            var produced = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var call in logic.Items.OfType<BlockCall>())
+            {
+                foreach (var argument in call.Inputs.Concat(call.InOuts))
+                {
+                    foreach (var source in argument.Sources.Where(source => source.RefLocalId is not null))
+                    {
+                        consumed.Add($"{source.RefSheetNumber}:{source.RefLocalId}");
+                    }
+                }
             }
 
+            foreach (var assignment in logic.Items.OfType<VariableAssignment>())
+            {
+                if (assignment.RefLocalId is not null)
+                {
+                    consumed.Add($"{assignment.RefSheetNumber}:{assignment.RefLocalId}");
+                }
+                produced.Add(assignment.SheetKey);
+            }
+
+            foreach (var item in logic.Items)
+            {
+                if (item is VariableReference or BlockCall) produced.Add(item.SheetKey);
+            }
+
+            if (logic.CrossSheetReferences.Count > 0)
+            {
+                result.Add(ValidationIssue.Warning(
+                    $"Block \"{block.Name}\": {logic.CrossSheetReferences.Count} FBD connection(s) reference a " +
+                    "localId that is not present on the same sheet and were matched across sheets " +
+                    $"({string.Join("; ", logic.CrossSheetReferences.Take(5))}). Verify them in the diagram.",
+                    block.SourceLine,
+                    block.Name));
+            }
+
+            var dangling = logic.Items
+                .Where(item => produced.Contains(item.SheetKey) && !consumed.Contains(item.SheetKey))
+                .ToList();
+
+            if (dangling.Count == 0) continue;
+
             result.Add(ValidationIssue.Warning(
-                $"Block \"{block.Name}\" is written in {block.Language}. An SCL conversion was attempted; verify the logic by hand.",
+                $"Block \"{block.Name}\": {dangling.Count} FBD item(s) produce a value that nothing " +
+                "consumes (localId " + string.Join(", ", dangling.Select(item => item.SheetKey)) +
+                "). They may be dead logic or unconnected; review the diagram.",
                 block.SourceLine,
                 block.Name));
         }
@@ -194,6 +294,16 @@ public sealed class ProjectValidator
         }
 
         if (StringPattern.IsMatch(raw)) return true;
+
+        // A library block that resolves to a Siemens name does not have to appear in this export:
+        // it comes from the Siemens library, or is emitted into Library/ as a stand-in block. Either
+        // way it will exist in the target project, so it is a known type. Mapping has not run yet at
+        // this point, so the rule is resolved here rather than read off the variable.
+        if (_mappings.LibraryFunctions.TryGetValue(raw, out var rule)
+            && !string.IsNullOrWhiteSpace(rule.Siemens))
+        {
+            return true;
+        }
 
         if (_mappings.Types.ContainsKey(raw)) return true;
         if (_userTypes.Contains(raw)) return true;

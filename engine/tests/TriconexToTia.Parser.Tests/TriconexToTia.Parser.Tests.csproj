@@ -17,4 +17,8 @@
     <ProjectReference Include="..\..\src\TriconexToTia.Parser\TriconexToTia.Parser.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Fixtures\**\*.xml" />
+  </ItemGroup>
+
 </Project>

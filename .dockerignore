@@ -1,0 +1,15 @@
+.git
+**/bin/
+**/obj/
+node_modules/
+.next/
+out/
+build/
+backup3/
+backup3.zip
+corpus/
+pt2-conv/work/
+artifacts/
+data/
+.env
+.env.*

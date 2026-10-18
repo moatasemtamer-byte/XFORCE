@@ -72,6 +72,23 @@ public sealed class TypeMapper
             return new TypeMappingResult($"\"{raw}\"", ConversionStatus.Converted, null, true);
         }
 
+        // A TriStation library block can also appear as a variable type ("VAR x : UNPACK16"), and
+        // the declared type must resolve to the block that will exist in the target project: the
+        // Siemens instruction (TDD_I -> TOF) or the stand-in SupportBlockGenerator emits
+        // (UNPACK16 -> Triconex_UNPACK16). The validator resolves the same rule for the same
+        // reason, before mapping runs. Functions cannot be a variable's type, so only block-kind
+        // rules apply; a rule without a Siemens name stays unmapped like any other unknown type.
+        if (_mappings.LibraryFunctions.TryGetValue(raw, out var libraryRule)
+            && !string.Equals(libraryRule.Kind, "function", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(libraryRule.Siemens))
+        {
+            return new TypeMappingResult(
+                libraryRule.Siemens!,
+                Mappings.ParseStatus(libraryRule.Status),
+                libraryRule.Note,
+                false);
+        }
+
         if (raw.Contains("STRUCT", StringComparison.OrdinalIgnoreCase))
         {
             return new TypeMappingResult(raw, ConversionStatus.Manual,

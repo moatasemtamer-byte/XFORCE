@@ -48,5 +48,25 @@ next-env.d.ts
 /engine/**/obj/
 /engine/samples/output/
 
+# conversion-chain tooling: sources are committed, build output is not
+/tools/**/bin/
+/tools/**/obj/
+/pt2-conv/**/bin/
+/pt2-conv/**/obj/
+/pt2-conv/work/
+/circuit-reader/**/bin/
+/circuit-reader/**/obj/
+
+# vendor BL dumps kept only as a local reference for the port
+/backup3/
+/backup3.zip
+
+# vendor template dump inside the ported BL tree: the four templates BL actually
+# loads at runtime are committed under /tools/vendor/BlankData
+/tools/bl-core/src/BlankData/
+
+# pt2conv embeds the compressed base container; the 9 MB expanded copy is a leftover
+/pt2-conv/src/Pt2Conv/Resources/base.pt2x/
+
 # keep the template example, never the real env file
 !.env.example

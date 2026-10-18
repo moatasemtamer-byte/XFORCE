@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using TriconexToTia.Core.Enums;
 using TriconexToTia.Core.Interfaces;
 using TriconexToTia.Core.Results;
@@ -51,6 +51,10 @@ public sealed class ReportGenerator : IGenerator
         builder.Append("  Failed        : ").Append(failed.Count).AppendLine(" items");
         builder.Append("  Unrecognized  : ").Append(unrecognized.Count).AppendLine(" XML element(s)");
         builder.AppendLine(new string('-', 66));
+        if (string.IsNullOrWhiteSpace(context.Options.PlcCpu))
+        {
+            builder.AppendLine("  WARNING: No CPU order number specified (--cpu-order-number). Ensure hardware is configured in TIA.");
+        }
 
         builder.AppendLine("FILES GENERATED");
         var files = context.Generated.Where(f => f.RelativePath != FileName).ToList();
@@ -111,6 +115,51 @@ public sealed class ReportGenerator : IGenerator
             }
         }
         builder.AppendLine(new string('-', 66));
+
+        if (context.Options.FbdOutput != FbdOutputMode.Scl)
+        {
+            var fallbacks = context.FbdOutcomes
+                .Where(outcome => outcome.Rendered != "FBD")
+                .OrderBy(outcome => outcome.Block, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            builder.AppendLine("FBD FALLBACK TO SCL");
+            if (fallbacks.Count == 0)
+            {
+                builder.AppendLine("  none");
+            }
+            else
+            {
+                foreach (var outcome in fallbacks)
+                {
+                    builder.Append("  ").Append(outcome.Block);
+                    if (!string.IsNullOrWhiteSpace(outcome.Reason)) builder.Append(" - ").Append(outcome.Reason);
+                    builder.AppendLine();
+                }
+            }
+            builder.AppendLine(new string('-', 66));
+
+            var appropriations = context.FbdOutcomes
+                .Where(outcome => outcome.Rendered == "FBD" && outcome.Approximations.Count > 0)
+                .OrderBy(outcome => outcome.Block, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            builder.AppendLine("FBD APPROXIMATIONS");
+            if (appropriations.Count == 0)
+            {
+                builder.AppendLine("  none");
+            }
+            else
+            {
+                foreach (var outcome in appropriations)
+                {
+                    builder.Append("  ").Append(outcome.Block).AppendLine(":");
+                    foreach (var approach in outcome.Approximations)
+                    {
+                        builder.Append("    - ").AppendLine(approach);
+                    }
+                }
+            }
+            builder.AppendLine(new string('-', 66));
+        }
 
         builder.AppendLine("UNRECOGNIZED XML ELEMENTS");
         if (unrecognized.Count == 0)
@@ -175,3 +224,4 @@ public sealed class ReportGenerator : IGenerator
         return ext.Length == 0 ? string.Empty : " " + ext;
     }
 }
+

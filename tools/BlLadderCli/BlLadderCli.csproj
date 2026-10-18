@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Headless wrapper around the UnityLadderConverter business layer (BL.dll).
+
+    BL is a .NET Framework 4.x / WPF assembly whose only entry point is a GUI
+    drag-and-drop window. This console host drives the same code path directly:
+    DPT -> MyDB, then LPT -> TriStation PLCopen XML, so the engine can run the
+    "equations -> XML" stage without a desktop.
+
+    Windows-only. Reference the already-built BL.dll rather than recompiling the
+    library so the wrapper adds no new source of truth.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>BlLadderCli</AssemblyName>
+    <RootNamespace>BlLadderCli</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <BlDir Condition="'$(BlDir)' == ''">$(MSBuildThisFileDirectory)..\..\backup3\backup3\Ladder\BL\bin\Release</BlDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BL">
+      <HintPath>$(BlDir)\BL.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="EPPlus">
+      <HintPath>$(BlDir)\EPPlus.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+  </ItemGroup>
+
+  <!-- BL resolves its blank PT2 templates from the entry assembly's folder, so the
+       BlankData set has to sit next to the produced executable. -->
+  <Target Name="CopyBlankData" AfterTargets="Build">
+    <ItemGroup>
+      <BlankDataFiles Include="$(BlDir)\BlankData\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(BlankDataFiles)"
+          DestinationFiles="@(BlankDataFiles->'$(OutDir)BlankData\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

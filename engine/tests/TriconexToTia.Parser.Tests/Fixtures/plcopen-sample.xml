@@ -1,0 +1,318 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Trimmed but structurally faithful sample of a TriStation 1131 export:
+     PLCopen tc6 body plus the ts: vendor extensions. -->
+<project xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns:ts="http://www.triconex.com/controller/03/2008" xmlns="http://www.plcopen.org/xml/tc6.xsd">
+  <fileHeader companyName="ConocoPhillips" productName="TriStation 1131" productVersion="1131" productRelease="V5.8.0.153" creationDateTime="2026-02-03T09:26:44.000" contentDescription="CON8-38 Gas Treatment Area&#10;TriStation 1131 V5.8.0.153" prjSchemaVersion="5.5.0.216" />
+  <types>
+    <dataTypes>
+      <dataType name="ALARM_REC">
+        <baseType>
+          <struct>
+            <variable name="Code">
+              <type>
+                <DINT />
+              </type>
+            </variable>
+            <variable name="Active">
+              <type>
+                <BOOL />
+              </type>
+            </variable>
+          </struct>
+        </baseType>
+      </dataType>
+    </dataTypes>
+    <pous>
+      <pou name="MAIN" version="1.0" pouType="program">
+        <interface>
+          <localVars name="Constants" constant="true">
+            <variable name="SP_MAX">
+              <type>
+                <REAL />
+              </type>
+              <initialValue>
+                <simpleValue value="100.0" />
+              </initialValue>
+            </variable>
+          </localVars>
+          <inputVars>
+            <variable name="IN_01">
+              <type>
+                <BOOL />
+              </type>
+              <initialValue>
+                <simpleValue value="" />
+              </initialValue>
+              <documentation><![CDATA[INPUT 01 TRIP]]></documentation>
+            </variable>
+            <variable name="SETPOINT">
+              <type>
+                <REAL />
+              </type>
+              <documentation><![CDATA[Flow setpoint]]></documentation>
+            </variable>
+          </inputVars>
+          <outputVars>
+            <variable name="OUT_01">
+              <type>
+                <BOOL />
+              </type>
+            </variable>
+          </outputVars>
+          <inOutVars>
+            <variable name="FEEDBACK">
+              <type>
+                <BOOL />
+              </type>
+            </variable>
+          </inOutVars>
+          <localVars name="Statics">
+            <variable name="RT_01">
+              <type>
+                <derived name="R_TRIG" />
+              </type>
+            </variable>
+            <variable name="RT_02">
+              <type>
+                <derived name="R_TRIG" />
+              </type>
+            </variable>
+            <variable name="LastAlarm">
+              <type>
+                <derived name="ALARM_REC" />
+              </type>
+            </variable>
+          </localVars>
+        </interface>
+        <body>
+          <FBD>
+            <ts:SHEETS Width="322" Height="202" Template="SheetTemplateD">
+              <ts:SHEET Number="1">
+                <ts:Macros Name="SHEET_TITLE">
+                  <ts:Value><![CDATA[FACESHEET]]></ts:Value>
+                </ts:Macros>
+              </ts:SHEET>
+              <ts:SHEET Number="2">
+                <ts:Macros Name="SHEET_TITLE">
+                  <ts:Value><![CDATA[DCS COMMAND FUNCTION BLOCK]]></ts:Value>
+                </ts:Macros>
+              </ts:SHEET>
+            </ts:SHEETS>
+            <comment localId="1" height="51" width="162">
+              <position x="80" y="76" ts:SheetNumber="1" />
+              <content><![CDATA[FB05_DCS_CMD]]></content>
+            </comment>
+            <block localId="2" width="10" height="8" typeName="R_TRIG" instanceName="RT_01">
+              <position x="80" y="19" ts:SheetNumber="2" />
+              <inputVariables>
+                <variable formalParameter="CLK">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="6" />
+                    <connection refLocalId="11" ts:FeedBack="false" />
+                  </connectionPointIn>
+                </variable>
+              </inputVariables>
+              <inOutVariables />
+              <outputVariables>
+                <variable formalParameter="Q">
+                  <connectionPointOut>
+                    <relPosition x="11" y="6" />
+                  </connectionPointOut>
+                </variable>
+              </outputVariables>
+            </block>
+            <inVariable localId="10" height="8" width="18">
+              <position x="20" y="25" ts:SheetNumber="2" />
+              <connectionPointOut>
+                <relPosition x="19" y="4" />
+              </connectionPointOut>
+              <expression>IN_01</expression>
+            </inVariable>
+            <inVariable localId="11" height="8" width="18">
+              <position x="20" y="45" ts:SheetNumber="2" />
+              <connectionPointOut>
+                <relPosition x="19" y="4" />
+              </connectionPointOut>
+              <expression>FEEDBACK</expression>
+            </inVariable>
+            <inOutVariable localId="12" height="6" width="18">
+              <ts:FBDITEM_EXT>
+                <ts:ANNOTATE>true</ts:ANNOTATE>
+                <ts:TEXT>%DESCRIPTION</ts:TEXT>
+              </ts:FBDITEM_EXT>
+              <position x="21" y="33" ts:SheetNumber="2" />
+              <connectionPointIn>
+                <relPosition x="-1" y="1" />
+              </connectionPointIn>
+              <connectionPointOut>
+                <relPosition x="19" y="1" />
+              </connectionPointOut>
+              <expression>FEEDBACK</expression>
+            </inOutVariable>
+            <block localId="3" width="10" height="8" typeName="OR">
+              <position x="121" y="21" ts:SheetNumber="2" />
+              <inputVariables>
+                <variable formalParameter="IN1">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="4" />
+                    <connection refLocalId="2" formalParameter="Q" ts:FeedBack="false" />
+                  </connectionPointIn>
+                </variable>
+                <variable formalParameter="IN2">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="6" />
+                    <connection refLocalId="12" ts:FeedBack="false" />
+                  </connectionPointIn>
+                </variable>
+              </inputVariables>
+              <inOutVariables />
+              <outputVariables>
+                <variable formalParameter="OR">
+                  <connectionPointOut>
+                    <relPosition x="11" y="4" />
+                  </connectionPointOut>
+                </variable>
+              </outputVariables>
+            </block>
+            <outVariable localId="13" height="6" width="18">
+              <position x="150" y="25" ts:SheetNumber="2" />
+              <connectionPointIn>
+                <relPosition x="-1" y="1" />
+                <connection refLocalId="3" formalParameter="OR" ts:FeedBack="false" />
+              </connectionPointIn>
+              <expression>OUT_01</expression>
+            </outVariable>
+          </FBD>
+        </body>
+        <documentation />
+        <ts:POU_EXT>
+          <ts:ApplicationType>CONTROL</ts:ApplicationType>
+          <ts:DocumentCategory />
+          <ts:DocumentAccess>Read/Write</ts:DocumentAccess>
+        </ts:POU_EXT>
+      </pou>
+      <pou name="STFB1" version="1.19" pouType="functionBlock">
+        <body>
+          <ST><![CDATA[FUNCTION_BLOCK STFB1
+VAR_INPUT
+IN1:REAL ;
+IN4:BOOL ;
+END_VAR
+
+VAR_OUTPUT
+OUT1:BOOL ;
+END_VAR
+IF (IN1 > IN2) OR (IN1 < IN3) THEN
+ OUT1 := IN4;
+ END_IF;
+
+END_FUNCTION_BLOCK]]></ST>
+        </body>
+        <documentation />
+        <ts:POU_EXT>
+          <ts:ApplicationType>SAFETY and CONTROL</ts:ApplicationType>
+        </ts:POU_EXT>
+      </pou>
+    </pous>
+  </types>
+  <instances>
+    <configurations>
+      <configuration name="MainConfiguration">
+        <resource name="MainResource">
+          <task name="ExecutionList" interval="100" priority="1" />
+        </resource>
+        <globalVars nonretain="true" nonpersistent="true">
+            <variable name="TAG1">
+              <type>
+                <BOOL />
+              </type>
+            </variable>
+            <variable name="ALXXX">
+              <type>
+                <BOOL />
+              </type>
+              <ts:TAGNAME>
+                <ts:TAG_DECLARATION Group1="" Group2="" Application="Control" SharedForRead="No" EnableMultipleWrite="No" />
+                <ts:POINT_ASSIGNMENT TagClass="USER_DEFINED" PointType="MEMORY" AliasCategory="NO_ALIAS" AliasType="UNALIASED" AliasNumber="0" PhysicalAddress="MBN.0242" AliasNumberExt="0" BinNumber="13" BinOffset="241" />
+                <ts:TAG_SCALING MinSpan="-32768" MaxSpan="32767" DisplayPrecision="1" DisableScaling="No" />
+                <ts:SOE_BLOCKS_ASSIGNMENT>0</ts:SOE_BLOCKS_ASSIGNMENT>
+                <ts:NO_CONVERSION_FOR_REAL>false</ts:NO_CONVERSION_FOR_REAL>
+                <ts:IO_MODULE_PARAMS IoModuleType="NA" PointOpt="NOT_USED">
+                  <ts:SDI_PARAMS TriggerState="NONE" MinimumTriggerTime="10" />
+                  <ts:SDO_PARAMS ShortedThreshold="10" OpenThreshold="2400" />
+                  <ts:AI_PARAMS MinRawValue="11397" MaxRawValue="56986" MinEngValue="4" MaxEngValue="20" FilterType="NONE" FldFaultLoLimit="3.5999999046325684" FldFaultHiLimit="21.600000381469727" />
+                </ts:IO_MODULE_PARAMS>
+              </ts:TAGNAME>
+            </variable>
+            <variable name="AIXXX">
+              <type>
+                <REAL />
+              </type>
+              <ts:TAGNAME>
+                <ts:TAG_DECLARATION Group1="H2S_LEL2" Group2="mREG281" Application="Safety" SharedForRead="No" EnableMultipleWrite="No" />
+                <ts:POINT_ASSIGNMENT TagClass="USER_DEFINED" PointType="MEMORY" AliasCategory="DEFAULT_ALIAS" AliasType="READWRITE_ALIASED" AliasNumber="40259" PhysicalAddress="MIW.0009" AliasNumberExt="415009" BinNumber="11" BinOffset="8" />
+                <ts:TAG_SCALING MinSpan="-32768" MaxSpan="32767" DisplayPrecision="1" DisableScaling="No" />
+                <ts:TAG_DISPLAY TrueStateName="ACTIVATED" FalseStateName="NORMAL" TrueStateColor="RED" FalseStateColor="GREEN" />
+                <ts:TAG_LOCATION AreaName="" Equipment="" SIFName="" />
+                <ts:SOE_BLOCKS_ASSIGNMENT>0</ts:SOE_BLOCKS_ASSIGNMENT>
+                <ts:NO_CONVERSION_FOR_REAL>false</ts:NO_CONVERSION_FOR_REAL>
+                <ts:IO_MODULE_PARAMS IoModuleType="NA" PointOpt="NOT_USED">
+                  <ts:SDI_PARAMS TriggerState="NONE" MinimumTriggerTime="10" />
+                  <ts:SDO_PARAMS ShortedThreshold="10" OpenThreshold="2400" />
+                  <ts:AI_PARAMS ClampEngValue="false" FldFaultMon="false" MinRawValue="11397" MaxRawValue="56987" MinEngValue="4.000086784362793" MaxEngValue="20.000087738037109" FilterType="NONE" FldFaultLoLimit="3.5999999046325684" FldFaultHiLimit="21.600000381469727" />
+                  <ts:HART_PARAMS Enable="false" DtmVendor="" DtmName="" MonConfigChanges="false" MonDeviceHealth="false" LockConfig="false" />
+                  <ts:PI_PARAMS PIPointType="0" GearTeeth="1" GearRatio="1" />
+                </ts:IO_MODULE_PARAMS>
+              </ts:TAGNAME>
+            </variable>
+          </globalVars>
+      </configuration>
+      <ts:CONTROLLER>
+        <ts:PPD_CONFIGURATION Name="TRICON_EP" MajorVersion="11" MinorVersion="2" MainProcessorId="241">
+          <ts:OPERATING_PARAMETERS>
+            <ts:DISABLE_STOP_ONKEYSWITCH>true</ts:DISABLE_STOP_ONKEYSWITCH>
+          </ts:OPERATING_PARAMETERS>
+          <ts:COMMUNICATION>
+            <ts:NODENAME>TRINODE008</ts:NODENAME>
+            <ts:NODENUMBER>8</ts:NODENUMBER>
+            <ts:UDPPORT>1502</ts:UDPPORT>
+            <ts:CONNECTION_PARAMETERS>
+              <ts:IP_ADDRESS>173.10.2.8</ts:IP_ADDRESS>
+              <ts:DEFAULT_CONNECTION_TYPE>Network</ts:DEFAULT_CONNECTION_TYPE>
+            </ts:CONNECTION_PARAMETERS>
+          </ts:COMMUNICATION>
+          <ts:HARDWARE_ALLOCATION>
+            <ts:CHASSIS_CONFIGURATION>
+              <ts:MAIN_CHASSIS Type="EP_MAIN" Description="Enhanced Performance Main Chassis">
+                <ts:MODULE ID="62">
+                  <ts:SLOT_ADDRESS>2</ts:SLOT_ADDRESS>
+                  <ts:SETUP_PARAMETERS>
+                    <ts:HardwareModuleAttribute Name="InputDiscretes" Value="32" />
+                    <ts:HardwareModuleAttribute Name="OutputDiscretes" Value="32" />
+                  </ts:SETUP_PARAMETERS>
+                </ts:MODULE>
+                <ts:MODULE ID="20">
+                  <ts:SLOT_ADDRESS>3</ts:SLOT_ADDRESS>
+                  <ts:SETUP_PARAMETERS>
+                    <ts:HardwareModuleAttribute Name="Left.AccessList.Client1.IpAddress" Value="0.0.0.0" />
+                  </ts:SETUP_PARAMETERS>
+                </ts:MODULE>
+              </ts:MAIN_CHASSIS>
+              <ts:EXP_CHASSIS ChassisNumber="2" Id="2" Type="LD_EXP" Description="Low Density Expansion Chassis">
+                <ts:MODULE ID="17">
+                  <ts:SLOT_ADDRESS>4</ts:SLOT_ADDRESS>
+                </ts:MODULE>
+              </ts:EXP_CHASSIS>
+            </ts:CHASSIS_CONFIGURATION>
+          </ts:HARDWARE_ALLOCATION>
+        </ts:PPD_CONFIGURATION>
+      </ts:CONTROLLER>
+    </configurations>
+    <LIBRARY_CONFIGURATION>
+      <LIBRARY Name="STDSHEET" />
+      <LIBRARY Name="STDLIB" />
+      <LIBRARY Name="TX1LIB" />
+      <LIBRARY Name="TCXLIB" />
+    </LIBRARY_CONFIGURATION>
+  </instances>
+</project>

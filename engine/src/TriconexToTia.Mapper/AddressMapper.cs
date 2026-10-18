@@ -73,19 +73,9 @@ public sealed class AddressMapper
                 continue;
             }
 
-            var address = NextMemory(variable.EffectiveTypeName, ref globalWord, ref globalDword, ref globalByte);
-            variable.LogicalAddress = address;
+            // No source address: the variable becomes a member of the generated global DB,
+            // which is not addressed, so it must not be given a placeholder memory address.
             variable.AddressResolved = false;
-            placeholders++;
-            mapping.Record(new MappingRecord
-            {
-                Category = "Address",
-                Source = variable.Name,
-                Target = address,
-                Status = ConversionStatus.Approximated,
-                Note = "Global variable has no source address; placeholder assigned.",
-                SourceLine = variable.SourceLine,
-            });
         }
 
         if (placeholders > 0)

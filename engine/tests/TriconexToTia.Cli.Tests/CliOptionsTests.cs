@@ -1,3 +1,5 @@
+using TriconexToTia.Core.Enums;
+
 namespace TriconexToTia.Cli.Tests;
 
 public sealed class CliOptionsTests
@@ -48,6 +50,7 @@ public sealed class CliOptionsTests
     }
 
     [Theory]
+    [InlineData("16", 16)]
     [InlineData("17", 17)]
     [InlineData("20", 20)]
     [InlineData("21", 21)]
@@ -60,15 +63,15 @@ public sealed class CliOptionsTests
     }
 
     [Theory]
-    [InlineData("16")]
     [InlineData("22")]
+    [InlineData("15")]
     [InlineData("0")]
     [InlineData("-1")]
     public void Parse_TiaVersionOutOfRange_Fails(string text)
     {
         var options = CliOptions.Parse(new[] { "--input", "a.xml", "--output", "o", "--tia-version", text });
 
-        Assert.Contains("must be between 17 and 21", options.Error);
+        Assert.Contains("must be between 16 and 21", options.Error);
     }
 
     [Fact]
@@ -139,11 +142,71 @@ public sealed class CliOptionsTests
     {
         var usage = CliOptions.Usage;
 
-        foreach (var option in new[] { "--input", "--output", "--tia-version", "--plc-cpu", "--mappings", "--validate-only", "--version", "--help" })
+        foreach (var option in new[] { "--input", "--output", "--tia-version", "--plc-cpu", "--mappings", "--fbd-output", "--fbd-dialect", "--validate-only", "--version", "--help" })
         {
             Assert.Contains(option, usage);
         }
 
         Assert.Contains("Exit codes:", usage);
+    }
+
+    [Fact]
+    public void Parse_FbdOutput_DefaultsToScl()
+    {
+        var options = CliOptions.Parse(new[] { "--input", "a.xml", "--output", "o" });
+
+        Assert.Null(options.Error);
+        Assert.Equal(FbdOutputMode.Scl, options.FbdOutput);
+    }
+
+    [Theory]
+    [InlineData("fbd", FbdOutputMode.Fbd)]
+    [InlineData("auto", FbdOutputMode.Auto)]
+    [InlineData("FBD", FbdOutputMode.Fbd)]
+    [InlineData("Scl", FbdOutputMode.Scl)]
+    public void Parse_FbdOutput_IsCaptured(string text, FbdOutputMode expected)
+    {
+        var options = CliOptions.Parse(new[] { "--input", "a.xml", "--output", "o", "--fbd-output", text });
+
+        Assert.Null(options.Error);
+        Assert.Equal(expected, options.FbdOutput);
+    }
+
+    [Fact]
+    public void Parse_FbdOutput_Invalid_Fails()
+    {
+        var options = CliOptions.Parse(new[] { "--input", "a.xml", "--output", "o", "--fbd-output", "graph" });
+
+        Assert.Contains("--fbd-output must be one of: scl, fbd, auto.", options.Error);
+    }
+
+    [Fact]
+    public void Parse_FbdDialect_DefaultsToUpdate3()
+    {
+        var options = CliOptions.Parse(new[] { "--input", "a.xml", "--output", "o" });
+
+        Assert.Equal(FbdBoxDialect.V16Update3, options.FbdDialect);
+    }
+
+    [Theory]
+    [InlineData("v16-ga", FbdBoxDialect.V16Ga)]
+    [InlineData("V16-GA", FbdBoxDialect.V16Ga)]
+    [InlineData("ga", FbdBoxDialect.V16Ga)]
+    [InlineData("v16-update3", FbdBoxDialect.V16Update3)]
+    [InlineData("update3", FbdBoxDialect.V16Update3)]
+    public void Parse_FbdDialect_IsCaptured(string text, FbdBoxDialect expected)
+    {
+        var options = CliOptions.Parse(new[] { "--input", "a.xml", "--output", "o", "--fbd-dialect", text });
+
+        Assert.Null(options.Error);
+        Assert.Equal(expected, options.FbdDialect);
+    }
+
+    [Fact]
+    public void Parse_FbdDialect_Invalid_Fails()
+    {
+        var options = CliOptions.Parse(new[] { "--input", "a.xml", "--output", "o", "--fbd-dialect", "v18" });
+
+        Assert.Contains("--fbd-dialect must be one of: v16-update3, v16-ga.", options.Error);
     }
 }

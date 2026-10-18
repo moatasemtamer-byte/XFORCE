@@ -1,0 +1,1196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns:ts="http://www.triconex.com/controller/03/2008" xmlns="http://www.plcopen.org/xml/tc6.xsd">
+<blocks>
+<block localId="59" width="10" height="8" typeName="AND">
+              <position x="84" y="22" ts:SheetNumber="1" />
+              <inputVariables>
+                <variable formalParameter="IN1">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="4" />
+                    <connection refLocalId="129" formalParameter="Q" >
+                      <position x="83" y="26" />
+                      <position x="61" y="26" />
+                    </connection>
+                  </connectionPointIn>
+                </variable>
+                <variable formalParameter="IN2">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="6" />
+                    <connection refLocalId="198" formalParameter="Q" >
+                      <position x="83" y="28" />
+                      <position x="64" y="28" />
+                      <position x="64" y="35" />
+                      <position x="22" y="35" />
+                      <position x="22" y="102" />
+                      <position x="17" y="102" />
+                    </connection>
+                  </connectionPointIn>
+                </variable>
+              </inputVariables>
+              <inOutVariables />
+              <outputVariables>
+                <variable formalParameter="AND">
+                  <connectionPointOut>
+                    <relPosition x="11" y="4" />
+                  </connectionPointOut>
+                </variable>
+              </outputVariables>
+            </block>
+            <block localId="916" width="10" height="6" typeName="MOVE">
+              <position x="84" y="123" ts:SheetNumber="7" />
+              <inputVariables>
+                <variable formalParameter="IN1">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="4" />
+                    <connection refLocalId="915" ts:FeedBack="false">
+                      <position x="83" y="127" />
+                      <position x="17" y="127" />
+                    </connection>
+                  </connectionPointIn>
+                </variable>
+              </inputVariables>
+              <inOutVariables />
+              <outputVariables>
+                <variable formalParameter="OUT1">
+                  <connectionPointOut>
+                    <relPosition x="11" y="4" />
+                  </connectionPointOut>
+                </variable>
+              </outputVariables>
+            </block>
+  <block localId="227" width="10" height="8" typeName="R_TRIG" instanceName="RT_01">
+    <position x="80" y="146" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="CLK">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="51" formalParameter="Q" ts:FeedBack="false">
+            <position x="79" y="152" />
+            <position x="19" y="152" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="3251" width="10" height="8" typeName="F_TRIG" instanceName="FT_02">
+    <position x="141" y="66" ts:SheetNumber="16" />
+    <inputVariables>
+      <variable formalParameter="CLK">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="3245" formalParameter="Q" ts:FeedBack="false">
+            <position x="140" y="72" />
+            <position x="130" y="72" />
+            <position x="130" y="65" />
+            <position x="122" y="65" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="337" width="9" height="8" typeName="GT">
+    <position x="93" y="44" ts:SheetNumber="3" />
+    <inputVariables>
+      <variable formalParameter="IN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="450" formalParameter="SCANDELTA" ts:FeedBack="false">
+            <position x="92" y="48" />
+            <position x="92" y="46" />
+            <position x="60" y="46" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="345" ts:FeedBack="false">
+            <position x="92" y="50" />
+            <position x="90" y="50" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="&gt;">
+        <connectionPointOut>
+          <relPosition x="10" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="339" width="10" height="8" typeName="GE">
+    <position x="92" y="80" ts:SheetNumber="3" />
+    <inputVariables>
+      <variable formalParameter="IN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="448" formalParameter="POINTS_DISABLED" ts:FeedBack="false">
+            <position x="91" y="84" />
+            <position x="91" y="80" />
+            <position x="61" y="80" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="347" ts:FeedBack="false">
+            <position x="91" y="86" />
+            <position x="89" y="86" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="&gt;=">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="337" width="9" height="8" typeName="LT">
+    <position x="93" y="44" ts:SheetNumber="3" />
+    <inputVariables>
+      <variable formalParameter="IN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="450" formalParameter="SCANDELTA" ts:FeedBack="false">
+            <position x="92" y="48" />
+            <position x="92" y="46" />
+            <position x="60" y="46" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="345" ts:FeedBack="false">
+            <position x="92" y="50" />
+            <position x="90" y="50" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="&lt;">
+        <connectionPointOut>
+          <relPosition x="10" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="339" width="10" height="8" typeName="LE">
+    <position x="92" y="80" ts:SheetNumber="3" />
+    <inputVariables>
+      <variable formalParameter="IN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="448" formalParameter="POINTS_DISABLED" ts:FeedBack="false">
+            <position x="91" y="84" />
+            <position x="91" y="80" />
+            <position x="61" y="80" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="347" ts:FeedBack="false">
+            <position x="91" y="86" />
+            <position x="89" y="86" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="&lt;=">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="2912" width="10" height="12" typeName="EQ">
+    <position x="44" y="59" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="IN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="11" ts:FeedBack="false">
+            <position x="43" y="63" />
+            <position x="44" y="63" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="2923" ts:FeedBack="false">
+            <position x="43" y="67" />
+            <position x="44" y="67" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="=">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="2914" width="10" height="12" typeName="NE">
+    <position x="44" y="72" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="IN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="2927">
+            <position x="43" y="76" />
+            <position x="43" y="76" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="2929">
+            <position x="43" y="80" />
+            <position x="43" y="80" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="&lt;&gt;">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="3223" width="10" height="14" typeName="TON" instanceName="TON_TOM">
+    <position x="141" y="19" ts:SheetNumber="16" />
+    <inputVariables>
+      <variable formalParameter="IN">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="950" formalParameter="Q" ts:FeedBack="false">
+            <position x="140" y="25" />
+            <position x="20" y="25" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="PT">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="3217">
+            <position x="140" y="29" />
+            <position x="140" y="29" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="ET">
+        <connectionPointOut>
+          <relPosition x="11" y="10" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="946" width="10" height="14" typeName="TOF" instanceName="TOF_TOM">
+    <position x="141" y="41" ts:SheetNumber="16" />
+    <inputVariables>
+      <variable formalParameter="IN">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="PT">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="944">
+            <position x="140" y="51" />
+            <position x="140" y="51" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="ET">
+        <connectionPointOut>
+          <relPosition x="11" y="10" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="946" width="10" height="14" typeName="TP" instanceName="TP_TOM">
+    <position x="141" y="41" ts:SheetNumber="16" />
+    <inputVariables>
+      <variable formalParameter="IN">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="PT">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="944">
+            <position x="140" y="51" />
+            <position x="140" y="51" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="ET">
+        <connectionPointOut>
+          <relPosition x="11" y="10" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="3" width="10" height="14" typeName="TP_I" instanceName="TP_TOM">
+    <position x="141" y="19" ts:SheetNumber="16" />
+    <inputVariables>
+      <variable formalParameter="IN">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="950" formalParameter="Q" ts:FeedBack="false">
+            <position x="140" y="25" />
+            <position x="20" y="25" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="PT">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="3217">
+            <position x="140" y="29" />
+            <position x="140" y="29" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="9" width="10" height="14" typeName="TDD_I" instanceName="TDD_I_TOM">
+    <position x="141" y="41" ts:SheetNumber="16" />
+    <inputVariables>
+      <variable formalParameter="I1">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="TGT">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="944">
+            <position x="140" y="51" />
+            <position x="140" y="51" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q1">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="9" width="10" height="14" typeName="TDE_I" instanceName="TDE_I_TOM">
+    <position x="141" y="41" ts:SheetNumber="16" />
+    <inputVariables>
+      <variable formalParameter="I1">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="TGT">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="944">
+            <position x="140" y="51" />
+            <position x="140" y="51" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q1">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="16291" width="10" height="8" typeName="MEDSEL">
+    <position x="19" y="13" ts:SheetNumber="1" />
+    <inputVariables>
+      <variable formalParameter="IN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="BIF">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="16292" width="10" height="12" typeName="PERDEV">
+    <position x="20" y="27" ts:SheetNumber="1" />
+    <inputVariables>
+      <variable formalParameter="NAME1">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="NAME2">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="SPAN">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="FRACTION">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="922" formalParameter="OR" ts:FeedBack="false">
+            <position x="140" y="47" />
+            <position x="122" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="PERDEV">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="3387" width="20" height="14" typeName="FB04_DI" instanceName="FB_AV121FB">
+    <position x="141" y="19" ts:SheetNumber="27" />
+    <inputVariables>
+      <variable formalParameter="SET_DCS">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="3383" ts:FeedBack="false">
+            <position x="140" y="25" />
+            <position x="40" y="25" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="RESET_DCS">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="3385" ts:FeedBack="false">
+            <position x="140" y="29" />
+            <position x="121" y="29" />
+            <position x="121" y="50" />
+            <position x="40" y="50" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="STATUS_DCS">
+        <connectionPointOut>
+          <relPosition x="21" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="743" width="20" height="42" typeName="UNPACK16" instanceName="UNPACK_mREG261">
+    <position x="141" y="19" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="CI">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="731">
+            <position x="140" y="25" />
+            <position x="140" y="25" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="INPUT">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="737" formalParameter="BIF" ts:FeedBack="false">
+            <position x="140" y="27" />
+            <position x="97" y="27" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="CO">
+        <connectionPointOut>
+          <relPosition x="21" y="6" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="NZ">
+        <connectionPointOut>
+          <relPosition x="21" y="8" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q01">
+        <connectionPointOut>
+          <relPosition x="21" y="10" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q02">
+        <connectionPointOut>
+          <relPosition x="21" y="12" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q03">
+        <connectionPointOut>
+          <relPosition x="21" y="14" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q04">
+        <connectionPointOut>
+          <relPosition x="21" y="16" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q05">
+        <connectionPointOut>
+          <relPosition x="21" y="18" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q06">
+        <connectionPointOut>
+          <relPosition x="21" y="20" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q07">
+        <connectionPointOut>
+          <relPosition x="21" y="22" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q08">
+        <connectionPointOut>
+          <relPosition x="21" y="24" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q09">
+        <connectionPointOut>
+          <relPosition x="21" y="26" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q10">
+        <connectionPointOut>
+          <relPosition x="21" y="28" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q11">
+        <connectionPointOut>
+          <relPosition x="21" y="30" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q12">
+        <connectionPointOut>
+          <relPosition x="21" y="32" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q13">
+        <connectionPointOut>
+          <relPosition x="21" y="34" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q14">
+        <connectionPointOut>
+          <relPosition x="21" y="36" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q15">
+        <connectionPointOut>
+          <relPosition x="21" y="38" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="Q16">
+        <connectionPointOut>
+          <relPosition x="21" y="40" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="106" width="11" height="20" typeName="TCJ_CONV">
+    <position x="63" y="71" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="MC">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="109">
+            <position x="62" y="75" />
+            <position x="62" y="75" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="CONVM">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="112">
+            <position x="62" y="79" />
+            <position x="62" y="79" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="CONVB">
+        <connectionPointIn>
+          <relPosition x="-1" y="12" />
+          <connection refLocalId="115">
+            <position x="62" y="83" />
+            <position x="62" y="83" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="COLDJNC">
+        <connectionPointIn>
+          <relPosition x="-1" y="16" />
+          <connection refLocalId="118">
+            <position x="62" y="87" />
+            <position x="62" y="87" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="TCJ_CONV">
+        <connectionPointOut>
+          <relPosition x="12" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="10361" width="10" height="10" typeName="AIN">
+    <position x="65" y="19" ts:SheetNumber="1" />
+    <inputVariables>
+      <variable formalParameter="MX">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="731">
+            <position x="140" y="25" />
+            <position x="140" y="25" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="IN">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="731">
+            <position x="140" y="25" />
+            <position x="140" y="25" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="MN">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="731">
+            <position x="140" y="25" />
+            <position x="140" y="25" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="AIN">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="5658" width="10" height="14" typeName="SCALE">
+    <position x="56" y="67" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="INPUT">
+        <connectionPointIn>
+          <relPosition x="-1" y="4" />
+          <connection refLocalId="1">
+            <position x="55" y="71" />
+            <position x="55" y="71" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="MAX1">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="2">
+            <position x="55" y="73" />
+            <position x="55" y="73" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="MIN1">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="3">
+            <position x="55" y="75" />
+            <position x="55" y="75" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="MAX2">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="4">
+            <position x="55" y="77" />
+            <position x="55" y="77" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="MIN2">
+        <connectionPointIn>
+          <relPosition x="-1" y="12" />
+          <connection refLocalId="5">
+            <position x="55" y="79" />
+            <position x="55" y="79" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="SCALE">
+        <connectionPointOut>
+          <relPosition x="11" y="4" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="11803" width="10" height="18" typeName="CTU" instanceName="CTU1">
+    <position x="48" y="72" ts:SheetNumber="1" />
+    <inputVariables>
+      <variable formalParameter="CU">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="11806">
+            <position x="47" y="78" />
+            <position x="47" y="78" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="R">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="11809">
+            <position x="47" y="82" />
+            <position x="47" y="82" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="PV">
+        <connectionPointIn>
+          <relPosition x="-1" y="14" />
+          <connection refLocalId="11812">
+            <position x="47" y="86" />
+            <position x="47" y="86" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="CV">
+        <connectionPointOut>
+          <relPosition x="11" y="10" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+    <ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>
+  </block>
+  <block localId="5" width="10" height="10" typeName="SR" instanceName="SR_BMSXS598">
+    <position x="104" y="21" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="S1">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="4" formalParameter="OR" ts:FeedBack="false">
+            <position x="103" y="27" />
+            <position x="85" y="27" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="R">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="5" formalParameter="OR" ts:FeedBack="false">
+            <position x="103" y="29" />
+            <position x="101" y="29" />
+            <position x="101" y="145" />
+            <position x="17" y="145" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q1">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="5" width="10" height="10" typeName="RS" instanceName="SR_BMSXS598">
+    <position x="104" y="21" ts:SheetNumber="2" />
+    <inputVariables>
+      <variable formalParameter="S">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="4" formalParameter="OR" ts:FeedBack="false">
+            <position x="103" y="27" />
+            <position x="85" y="27" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="R1">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="5" formalParameter="OR" ts:FeedBack="false">
+            <position x="103" y="29" />
+            <position x="101" y="29" />
+            <position x="101" y="145" />
+            <position x="17" y="145" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q1">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+  <block localId="44026" width="10" height="12" typeName="TMR_I" instanceName="tt">
+    <position x="54" y="41" ts:SheetNumber="1" />
+    <inputVariables>
+      <variable formalParameter="IN">
+        <connectionPointIn>
+          <relPosition x="-1" y="6" />
+          <connection refLocalId="5" formalParameter="OR" ts:FeedBack="false">
+            <position x="53" y="47" />
+            <position x="26" y="47" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="RESET">
+        <connectionPointIn>
+          <relPosition x="-1" y="8" />
+          <connection refLocalId="6" formalParameter="OR" ts:FeedBack="false">
+            <position x="53" y="49" />
+            <position x="45" y="49" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+      <variable formalParameter="PT">
+        <connectionPointIn>
+          <relPosition x="-1" y="10" />
+          <connection refLocalId="7" ts:FeedBack="false">
+            <position x="53" y="51" />
+            <position x="50" y="51" />
+            <position x="50" y="59" />
+            <position x="26" y="59" />
+          </connection>
+        </connectionPointIn>
+      </variable>
+    </inputVariables>
+    <inOutVariables />
+    <outputVariables>
+      <variable formalParameter="Q">
+        <connectionPointOut>
+          <relPosition x="11" y="6" />
+        </connectionPointOut>
+      </variable>
+      <variable formalParameter="ET">
+        <connectionPointOut>
+          <relPosition x="11" y="8" />
+        </connectionPointOut>
+      </variable>
+    </outputVariables>
+  </block>
+          <block localId="12" width="10" height="10" typeName="STFB" instanceName="STFB1">
+              <position x="16" y="54" ts:SheetNumber="1" />
+              <inputVariables>
+                <variable formalParameter="IN1">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="6" />
+                    <connection refLocalId="13">
+                      <position x="15" y="60" />
+                      <position x="15" y="60" />
+                    </connection>
+                  </connectionPointIn>
+                </variable>
+                <variable formalParameter="IN2">
+                  <connectionPointIn>
+                    <relPosition x="-1" y="8" />
+                    <connection refLocalId="16">
+                      <position x="15" y="62" />
+                      <position x="15" y="62" />
+                    </connection>
+                  </connectionPointIn>
+                </variable>
+              </inputVariables>
+              <inOutVariables />
+              <outputVariables>
+                <variable formalParameter="OUT1">
+                  <connectionPointOut>
+                    <relPosition x="11" y="6" />
+                  </connectionPointOut>
+                </variable>
+              </outputVariables>
+            </block>
+  <comment localId="4175" height="42" width="95">
+              <ts:COMMENT_EXT>
+                <ts:TEXTALIGNMENT>Center</ts:TEXTALIGNMENT>
+                <ts:BORDER>Double</ts:BORDER>
+                <ts:TEXTSIZE>18</ts:TEXTSIZE>
+                <ts:EXPANDMACROS>TRUE</ts:EXPANDMACROS>
+                <ts:MACROEDITING>FALSE</ts:MACROEDITING>
+                <ts:BEHINDLOGIC>FALSE</ts:BEHINDLOGIC>
+              </ts:COMMENT_EXT>
+              <position x="50" y="80" ts:SheetNumber="1" />
+              <content><![CDATA[High Density Poly Ethylene = HDPE- CPC44002 Triconex SIS MBPP            
+                                                                          
+ This system was installed from the HDPE safety critical upgrade project  
+ and this is Phase 1 of the 3 phases to remove non-HIPS loops from the HIPS
+ System and REMOVE safety critical logics from the HDPE Modicon system into
+ the new Triconex.                                                        
+                                                                          
+ Revision date:   3-15-02                                                 
+  Programmed modifications by Rick Keene                                  
+ Revision date:   6-10-06                                                 
+  Programmed SHE VDU logic by J.Powell                                    
+ Revision date:   1-21-10                                                 
+  Changed Pre-Trip and Trip Setpoints for A4401 by P. Michalik  ]]></content>
+            </comment>
+  
+  <inVariable localId="515" height="2" width="10">
+    <ts:FBDITEM_EXT>
+      <ts:DATATYPE>TIME</ts:DATATYPE>
+      <ts:ANNOTATE>false</ts:ANNOTATE>
+      <ts:TEXT />
+    </ts:FBDITEM_EXT>
+    <position x="65" y="47" ts:SheetNumber="10" />
+    <connectionPointOut>
+      <relPosition x="11" y="1" />
+    </connectionPointOut>
+    <expression>T#3S</expression>
+  </inVariable>
+  <inVariable localId="61" height="2" width="5">
+    <ts:FBDITEM_EXT>
+      <ts:DATATYPE>DINT</ts:DATATYPE>
+      <ts:ANNOTATE>false</ts:ANNOTATE>
+      <ts:TEXT />
+    </ts:FBDITEM_EXT>
+    <position x="77" y="78" ts:SheetNumber="2" />
+    <connectionPointOut>
+      <relPosition x="6" y="1" />
+    </connectionPointOut>
+    <expression>719</expression>
+  </inVariable>
+  <inVariable localId="61" height="2" width="5">
+    <ts:FBDITEM_EXT>
+      <ts:DATATYPE>REAL</ts:DATATYPE>
+      <ts:ANNOTATE>false</ts:ANNOTATE>
+      <ts:TEXT />
+    </ts:FBDITEM_EXT>
+    <position x="77" y="78" ts:SheetNumber="2" />
+    <connectionPointOut>
+      <relPosition x="6" y="1" />
+    </connectionPointOut>
+    <expression>1000.0</expression>
+  </inVariable>
+  <inVariable localId="61" height="2" width="5">
+    <ts:FBDITEM_EXT>
+      <ts:DATATYPE>BOOL</ts:DATATYPE>
+      <ts:ANNOTATE>false</ts:ANNOTATE>
+      <ts:TEXT />
+    </ts:FBDITEM_EXT>
+    <position x="77" y="78" ts:SheetNumber="2" />
+    <connectionPointOut>
+      <relPosition x="6" y="1" />
+    </connectionPointOut>
+    <expression>TRUE</expression>
+  </inVariable>
+  <localVars name="Constants" constant="true">
+  <variable name="T#3S">
+    <type>
+      <TIME />
+    </type>
+  </variable>
+
+    <variable name="719">
+      <type>
+        <DINT />
+      </type>
+    </variable>
+    <variable name="1000.0">
+      <type>
+        <REAL />
+      </type>
+    </variable>
+    <variable name="TRUE">
+      <type>
+        <BOOL />
+      </type>
+    </variable>
+   </localVars>
+			</blocks>
+  <pou name="STFB1" version="1.19" pouType="functionBlock">
+    <body>
+      <ST>
+        <![CDATA[FUNCTION_BLOCK STFB1
+
+ 
+END_FUNCTION_BLOCK
+
+]]>
+      </ST>
+    </body>
+    <documentation />
+    <ts:POU_EXT>
+      <ts:ApplicationType>SAFETY and CONTROL</ts:ApplicationType>
+      <ts:DocumentCategory />
+      <ts:DocumentDescription />
+      <ts:DocumentAccess>Read/Write</ts:DocumentAccess>
+      <ts:CEMCauseRowInputs>0</ts:CEMCauseRowInputs>
+      <ts:CEMEffectColOutputs>0</ts:CEMEffectColOutputs>
+      <ts:CEMIntersections>FALSE</ts:CEMIntersections>
+      <ts:CEMAppDefinedStates>FALSE</ts:CEMAppDefinedStates>
+      <ts:DocumentUsage>NONE</ts:DocumentUsage>
+    </ts:POU_EXT>
+  </pou>
+</project>
+          

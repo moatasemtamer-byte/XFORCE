@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Cross-platform port of the BlLadderCli wrapper.
+
+    Same Program.cs as the net48 host (linked, not copied) but built against
+    modern .NET so it can run in a Linux container. BL.dll is a .NET Framework
+    assembly; if the code paths this CLI drives never touch WPF/WinForms types
+    the runtime resolves everything lazily and the port works unchanged.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net7.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>BlLadderCli</AssemblyName>
+    <RootNamespace>BlLadderCli</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <BlDir Condition="'$(BlDir)' == ''">$(MSBuildThisFileDirectory)..\vendor</BlDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\BlLadderCli\Program.cs" />
+    <Compile Include="PortableInit.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\bl-core\BL.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="EPPlus">
+      <HintPath>$(BlDir)\EPPlus.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="7.0.0" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="7.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="7.0.0" />
+  </ItemGroup>
+
+  <!-- EPPlus 4 is a .NET Framework assembly. If any reader path reaches into System.Drawing on
+       Unix it needs the explicit opt-in (plus libgdiplus, installed in the container image). -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.Drawing.EnableUnixSupport" Value="true" />
+  </ItemGroup>
+
+  <Target Name="CopyBlankData" AfterTargets="Build">
+    <ItemGroup>
+      <BlankDataFiles Include="$(BlDir)\BlankData\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(BlankDataFiles)"
+          DestinationFiles="@(BlankDataFiles->'$(OutDir)BlankData\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- BL resolves BlankData relative to its own assembly directory, so the publish output that
+       ships in the Linux container needs the same sibling folder. -->
+  <Target Name="CopyBlankDataToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <BlankDataPublishFiles Include="$(BlDir)\BlankData\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(BlankDataPublishFiles)"
+          DestinationFiles="@(BlankDataPublishFiles->'$(PublishDir)BlankData\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

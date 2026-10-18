@@ -22,5 +22,9 @@ public sealed class ConversionResult
     public string? Report => Files
         .FirstOrDefault(f => f.RelativePath == "conversion_report.txt")?.Content;
 
+    /// <summary>Convenience accessor for the generated machine-readable report (GUI evidence).</summary>
+    public string? ReportJson => Files
+        .FirstOrDefault(f => f.RelativePath == "report.json")?.Content;
+
     public bool ValidateOnly { get; init; }
 }

@@ -1,14 +1,28 @@
 using System.IO.Compression;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
+using System.Text.Json.Serialization;
+using TriconexToTia.Status;
+using TriconexToTia.Core.Enums;
 using TriconexToTia.Core.Results;
 using TriconexToTia.Engine;
+using TriconexToTia.Server;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var maxUploadBytes = ReadLong("MSW_MAX_UPLOAD_BYTES", 512L * 1024 * 1024);
 var authToken = Environment.GetEnvironmentVariable("XFORCEMSW_ENGINE_TOKEN")
     ?? Environment.GetEnvironmentVariable("MSW_ENGINE_TOKEN");
+
+// Evidence-backed status. Every value is computed from files on disk; nothing is hard-coded.
+var statusEngine = new StatusEngine();
+var statusJson = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+};
 
 builder.WebHost.ConfigureKestrel(kestrel =>
 {
@@ -35,8 +49,18 @@ builder.Services.Configure<FormOptions>(form =>
 var app = builder.Build();
 var engine = new ConversionEngine();
 
+// Building an openable TIA project needs Siemens Openness, which only exists where TIA Portal is
+// installed. When it is absent (e.g. the hosted Linux engine) POST /convert/project is refused and
+// the plain package endpoint is used instead. TIA is single-instance, so imports are serialised.
+var tiaInstallPath = Environment.GetEnvironmentVariable("MSW_TIA_INSTALL_PATH")
+    ?? @"C:\Program Files\Siemens\Automation\Portal V16";
+var tiaCpuOrderNumber = Environment.GetEnvironmentVariable("MSW_TIA_CPU_ORDER_NUMBER");
+var tiaProjectsDir = Environment.GetEnvironmentVariable("MSW_TIA_PROJECTS_DIR");
+var tiaImportAvailable = OperatingSystem.IsWindows() && Directory.Exists(tiaInstallPath);
+var tiaImportGate = new SemaphoreSlim(1, 1);
+
 app.MapGet("/", () => Results.Text(
-    "TriconexToTia engine. Endpoints: GET /health, POST /convert (multipart/form-data).",
+    "TriconexToTia engine. Endpoints: GET /health, POST /convert, POST /convert/project (multipart/form-data).",
     "text/plain"));
 
 app.MapGet("/health", () => Results.Json(new
@@ -45,113 +69,331 @@ app.MapGet("/health", () => Results.Json(new
     engineVersion = ConversionEngine.Version,
     converter = "triconex-to-tia",
     maxUploadBytes,
+    tiaImport = new
+    {
+        available = tiaImportAvailable,
+        installPath = tiaInstallPath,
+        cpuOrderNumber = tiaCpuOrderNumber,
+    },
 }));
 
 app.MapPost("/convert", async (HttpRequest request) =>
 {
-    if (!IsAuthorized(request, authToken))
+    var (file, filename, form, error) = await ReadUploadAsync(request, authToken);
+    if (file is null || form is null) return error!;
+
+    var target = (form["target"].ToString() ?? string.Empty).Trim().ToLowerInvariant();
+
+    // Normalize the upload to TriStation PLCopen XML before any target runs: a ladder PDF/listing
+    // goes through the ladder pipeline, a Siemens SimaticML export (AP) is translated by pt2conv,
+    // and a TriStation XML passes straight through. Every target then consumes the same file.
+    var prepared = await PrepareSourceAsync(file, filename!, form, request.HttpContext.RequestAborted);
+    if (prepared.Error is not null) return prepared.Error;
+
+    var sourceBytes = prepared.Xml!;
+    filename = prepared.FileName;
+    var ladderReport = prepared.LadderReport;
+    var importReport = prepared.ImportReport;
+
+    // The XML branch stops at the interchange format: for a ladder upload this is the
+    // TriStation PLCopen XML the pipeline produced; for an XML upload it is echoed back.
+    if (target is "xml")
     {
-        return Results.Json(new { error = "unauthorized" }, statusCode: StatusCodes.Status401Unauthorized);
+        var xmlArtifacts = new List<object>
+        {
+            new
+            {
+                name = filename!,
+                mimeType = "application/xml",
+                kind = "primary",
+                contentBase64 = Convert.ToBase64String(sourceBytes),
+            },
+        };
+        if (!string.IsNullOrWhiteSpace(ladderReport))
+        {
+            xmlArtifacts.Add(new
+            {
+                name = "ladder_report.txt",
+                mimeType = "text/plain",
+                kind = "report",
+                contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(ladderReport)),
+            });
+        }
+        if (!string.IsNullOrWhiteSpace(importReport))
+        {
+            xmlArtifacts.Add(new
+            {
+                name = "simatic_report.txt",
+                mimeType = "text/plain",
+                kind = "report",
+                contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(importReport)),
+            });
+        }
+
+        return Results.Json(
+            new
+            {
+                artifacts = xmlArtifacts,
+                warnings = Array.Empty<string>(),
+                summary = new Dictionary<string, object?>
+                {
+                    ["target"] = "xml",
+                    ["bytes"] = sourceBytes.Length,
+                },
+                engineVersion = ConversionEngine.Version,
+            },
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
     }
 
-    if (!request.HasFormContentType)
+    // The PT2X branch builds a TriStation container straight from the XML and never
+    // touches the TIA generator, so it short-circuits before the engine runs.
+    if (target is "pt2x")
     {
-        return Results.Json(new { error = "Expected multipart/form-data." }, statusCode: StatusCodes.Status400BadRequest);
-    }
+        await using var source = new MemoryStream(sourceBytes, writable: false);
+        var built = await Pt2xBuilder.BuildAsync(source, filename!, request.HttpContext.RequestAborted);
+        if (!built.Success)
+        {
+            return Results.Json(
+                new { error = built.Error ?? "PT2X build failed.", report = built.Report, ladderReport },
+                statusCode: StatusCodes.Status422UnprocessableEntity);
+        }
 
-    IFormCollection form;
-    try
-    {
-        form = await request.ReadFormAsync();
-    }
-    catch (Exception exception)
-    {
-        return Results.Json(new { error = $"Malformed upload: {exception.Message}" }, statusCode: StatusCodes.Status400BadRequest);
-    }
+        var artifacts = new List<object>
+        {
+            new
+            {
+                name = $"{Sanitize(Path.GetFileNameWithoutExtension(filename!))}_project.pt2x",
+                mimeType = "application/octet-stream",
+                kind = "primary",
+                contentBase64 = Convert.ToBase64String(built.Bytes!),
+            },
+        };
+        if (!string.IsNullOrWhiteSpace(built.Report))
+        {
+            artifacts.Add(new
+            {
+                name = "pt2x_build_report.txt",
+                mimeType = "text/plain",
+                kind = "report",
+                contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(built.Report)),
+            });
+        }
+        if (!string.IsNullOrWhiteSpace(ladderReport))
+        {
+            artifacts.Add(new
+            {
+                name = "ladder_report.txt",
+                mimeType = "text/plain",
+                kind = "report",
+                contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(ladderReport)),
+            });
+        }
+        if (!string.IsNullOrWhiteSpace(importReport))
+        {
+            artifacts.Add(new
+            {
+                name = "simatic_report.txt",
+                mimeType = "text/plain",
+                kind = "report",
+                contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(importReport)),
+            });
+        }
 
-    var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
-    if (file is null || file.Length == 0)
-    {
-        return Results.Json(new { error = "No source file was uploaded." }, statusCode: StatusCodes.Status400BadRequest);
+        return Results.Json(
+            new
+            {
+                artifacts,
+                warnings = Array.Empty<string>(),
+                summary = new Dictionary<string, object?> { ["target"] = "pt2x" },
+                engineVersion = ConversionEngine.Version,
+            },
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
     }
-
-    var filename = string.IsNullOrWhiteSpace(file.FileName) ? "project.xml" : file.FileName;
-    var options = ReadOptions(form["options"].ToString(), form["notes"].ToString());
 
     ConversionResult result;
     try
     {
-        await using var stream = file.OpenReadStream();
-        using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer);
-        buffer.Position = 0;
-        result = engine.Run(buffer, options, filename);
+        using var buffer = new MemoryStream(sourceBytes, writable: false);
+        var options = ReadOptions(form["options"].ToString(), form["notes"].ToString());
+        result = engine.Run(buffer, options, filename!);
     }
     catch (Exception exception)
     {
-        return Results.Json(new { error = $"Conversion crashed: {exception.Message}" }, statusCode: StatusCodes.Status500InternalServerError);
+        return Results.Json(
+            new { error = $"Conversion crashed: {exception.Message}", ladderReport },
+            statusCode: StatusCodes.Status500InternalServerError);
     }
 
     if (!result.Success)
     {
         var fatal = result.Validation.Fatal.Select(issue => issue.Message).ToArray();
         return Results.Json(
-            new { error = result.FatalError ?? "Conversion failed.", fatal },
+            new { error = result.FatalError ?? "Conversion failed.", fatal, ladderReport },
             statusCode: StatusCodes.Status422UnprocessableEntity);
     }
 
-    var packageBytes = BuildZip(result);
-    var packageName = $"{Sanitize(result.Project.Name)}_tia_package.zip";
+    var tiaArtifacts = new List<object>
+    {
+        new
+        {
+            name = $"{Sanitize(result.Project.Name)}_tia_package.zip",
+            mimeType = "application/zip",
+            kind = "primary",
+            contentBase64 = Convert.ToBase64String(BuildZip(result)),
+        },
+    };
+    AddReportArtifact(tiaArtifacts, result);
+    if (!string.IsNullOrWhiteSpace(ladderReport))
+    {
+        tiaArtifacts.Add(new
+        {
+            name = "ladder_report.txt",
+            mimeType = "text/plain",
+            kind = "report",
+            contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(ladderReport)),
+        });
+    }
+
+    return Results.Json(
+        new
+        {
+            artifacts = tiaArtifacts,
+            warnings = result.Validation.Warnings.Select(issue => issue.Message).ToArray(),
+            summary = BuildSummary(result),
+            engineVersion = ConversionEngine.Version,
+        },
+        new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+});
+
+// Converts the upload and then drives TIA Portal (Siemens Openness) to produce an openable .ap16
+// project, returned as a zip of the project folder. Only usable where TIA Portal is installed; the
+// answer to the user's "convert straight to a project" request.
+app.MapPost("/convert/project", async (HttpRequest request) =>
+{
+    if (!tiaImportAvailable)
+    {
+        return Results.Json(
+            new
+            {
+                error = "Building a TIA project needs TIA Portal, which was not found on the engine host.",
+                detail = $"Expected an installation at '{tiaInstallPath}'. Set MSW_TIA_INSTALL_PATH, or use the package download instead.",
+            },
+            statusCode: StatusCodes.Status501NotImplemented);
+    }
+
+    var (result, error) = await ConvertUploadAsync(request, authToken, engine);
+    if (result is null) return error!;
+
+    var build = await TiaProjectBuilder.BuildAsync(
+        result, tiaInstallPath, tiaCpuOrderNumber, tiaProjectsDir, tiaImportGate, request.HttpContext.RequestAborted);
+
+    if (!build.Success || build.Zip is null)
+    {
+        return Results.Json(
+            new
+            {
+                error = build.Error ?? "The TIA project could not be built.",
+                projectName = build.ProjectName,
+                log = build.Log,
+            },
+            statusCode: StatusCodes.Status422UnprocessableEntity);
+    }
 
     var artifacts = new List<object>
     {
         new
         {
-            name = packageName,
+            name = $"{build.ProjectName}_tia_project.zip",
             mimeType = "application/zip",
             kind = "primary",
-            contentBase64 = Convert.ToBase64String(packageBytes),
+            contentBase64 = Convert.ToBase64String(build.Zip),
+        },
+        new
+        {
+            name = $"{Sanitize(result.Project.Name)}_tia_package.zip",
+            mimeType = "application/zip",
+            kind = "package",
+            contentBase64 = Convert.ToBase64String(BuildZip(result)),
         },
     };
+    AddReportArtifact(artifacts, result);
 
-    var report = result.Report;
-    if (!string.IsNullOrEmpty(report))
-    {
-        artifacts.Add(new
+    return Results.Json(
+        new
         {
-            name = "conversion_report.txt",
-            mimeType = "text/plain",
-            kind = "report",
-            contentBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(report)),
-        });
+            artifacts,
+            warnings = result.Validation.Warnings.Select(issue => issue.Message).ToArray(),
+            summary = BuildSummary(result),
+            projectName = build.ProjectName,
+            engineVersion = ConversionEngine.Version,
+        },
+        new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+});
+
+// ---------------------------------------------------------------------------
+// Evidence-backed status API (consumed by the React frontend and the WPF shell).
+// output dir holds report.json + roundtrip.json; status dir holds tests.trx.
+// Both are resolved from ?output=/?status= or MSW_OUTPUT_DIR / MSW_STATUS_DIR.
+// ---------------------------------------------------------------------------
+app.MapGet("/api/status", (HttpRequest request) =>
+{
+    if (!TryResolveDirs(request, out var output, out var status, out var error))
+    {
+        return Results.Json(new { error }, statusCode: StatusCodes.Status400BadRequest);
     }
 
-    var warnings = result.Validation.Warnings.Select(issue => issue.Message).ToArray();
-    var summary = new Dictionary<string, object?>
+    var projectStatus = statusEngine.Compute(output, status);
+    return Results.Json(projectStatus, statusJson);
+});
+
+app.MapGet("/api/evidence/{name}", (string name, HttpRequest request) =>
+{
+    if (!TryResolveDirs(request, out var output, out var status, out var error))
     {
-        ["blocks"] = result.Project.Blocks.Count,
-        ["udts"] = result.Project.DataTypes.Count,
-        ["tags"] = result.Project.IoPoints.Count + result.Project.GlobalVariables.Count,
-        ["approximations"] = result.Mapping.Count(TriconexToTia.Core.Enums.ConversionStatus.Approximated),
-        ["manualActions"] = result.Mapping.ManualActions.Count,
-        ["unrecognized"] = result.Project.UnrecognizedElements.Count,
+        return Results.Json(new { error }, statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    var path = name.ToLowerInvariant() switch
+    {
+        "report" => Path.Combine(output, "report.json"),
+        "roundtrip" => Path.Combine(output, "roundtrip.json"),
+        "tests" => Path.Combine(status, "tests.trx"),
+        "conversion-report" => Path.Combine(output, "conversion_report.txt"),
+        _ => null,
     };
 
-    var response = new
-    {
-        artifacts,
-        warnings,
-        summary,
-        engineVersion = ConversionEngine.Version,
-    };
+    if (path is null) return Results.NotFound(new { error = $"Unknown evidence '{name}'." });
+    if (!File.Exists(path)) return Results.NotFound(new { error = $"Evidence not found: {path}" });
 
-    return Results.Json(response, new JsonSerializerOptions
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    });
+    var contentType = path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase)
+        ? "application/xml"
+        : path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? "application/json" : "text/plain";
+    return Results.Text(File.ReadAllText(path), contentType);
 });
 
 app.Run();
+
+static bool TryResolveDirs(HttpRequest request, out string output, out string status, out string? error)
+{
+    output = request.Query["output"].FirstOrDefault()
+        ?? Environment.GetEnvironmentVariable("MSW_OUTPUT_DIR") ?? string.Empty;
+    status = request.Query["status"].FirstOrDefault()
+        ?? Environment.GetEnvironmentVariable("MSW_STATUS_DIR") ?? string.Empty;
+    error = null;
+
+    if (string.IsNullOrWhiteSpace(output))
+    {
+        error = "No output directory configured. Set MSW_OUTPUT_DIR or pass ?output=<dir>.";
+        return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(status))
+    {
+        status = Path.Combine(output, "status");
+    }
+
+    return true;
+}
 
 static bool IsAuthorized(HttpRequest request, string? token)
 {
@@ -163,6 +405,239 @@ static bool IsAuthorized(HttpRequest request, string? token)
     var presented = header["Bearer ".Length..].Trim();
     return string.Equals(presented, token, StringComparison.Ordinal);
 }
+
+static async Task<(IFormFile? File, string? FileName, IFormCollection? Form, IResult? Error)> ReadUploadAsync(
+    HttpRequest request,
+    string? authToken)
+{
+    if (!IsAuthorized(request, authToken))
+    {
+        return (null, null, null, Results.Json(new { error = "unauthorized" }, statusCode: StatusCodes.Status401Unauthorized));
+    }
+
+    if (!request.HasFormContentType)
+    {
+        return (null, null, null, Results.Json(new { error = "Expected multipart/form-data." }, statusCode: StatusCodes.Status400BadRequest));
+    }
+
+    IFormCollection form;
+    try
+    {
+        form = await request.ReadFormAsync();
+    }
+    catch (Exception exception)
+    {
+        return (null, null, null, Results.Json(new { error = $"Malformed upload: {exception.Message}" }, statusCode: StatusCodes.Status400BadRequest));
+    }
+
+    var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+    if (file is null || file.Length == 0)
+    {
+        return (null, null, null, Results.Json(new { error = "No source file was uploaded." }, statusCode: StatusCodes.Status400BadRequest));
+    }
+
+    var filename = string.IsNullOrWhiteSpace(file.FileName) ? "project.xml" : file.FileName;
+    return (file, filename, form, null);
+}
+
+static async Task<(ConversionResult? Result, IResult? Error)> ConvertUploadAsync(
+    HttpRequest request,
+    string? authToken,
+    ConversionEngine engine)
+{
+    var (file, filename, form, error) = await ReadUploadAsync(request, authToken);
+    if (file is null || form is null) return (null, error!);
+
+    var prepared = await PrepareSourceAsync(file, filename!, form, request.HttpContext.RequestAborted);
+    if (prepared.Error is not null) return (null, prepared.Error);
+
+    var options = ReadOptions(form["options"].ToString(), form["notes"].ToString());
+
+    ConversionResult result;
+    try
+    {
+        using var buffer = new MemoryStream(prepared.Xml!, writable: false);
+        result = engine.Run(buffer, options, prepared.FileName);
+    }
+    catch (Exception exception)
+    {
+        return (null, Results.Json(new { error = $"Conversion crashed: {exception.Message}" }, statusCode: StatusCodes.Status500InternalServerError));
+    }
+
+    if (!result.Success)
+    {
+        var fatal = result.Validation.Fatal.Select(issue => issue.Message).ToArray();
+        return (null, Results.Json(
+            new { error = result.FatalError ?? "Conversion failed.", fatal },
+            statusCode: StatusCodes.Status422UnprocessableEntity));
+    }
+
+    return (result, null);
+}
+
+/// <summary>
+/// Turns an upload into the TriStation PLCopen XML the rest of the pipeline expects. A ladder
+/// PDF/listing is run through the ladder pipeline; a Siemens SimaticML export (AP) is translated by
+/// pt2conv; a TriStation XML is returned unchanged. Non-XML bytes that match none of these fail
+/// with guidance instead of the XML reader's opaque "root level is invalid".
+/// </summary>
+static async Task<(byte[]? Xml, string FileName, string LadderReport, string ImportReport, IResult? Error)> PrepareSourceAsync(
+    IFormFile file,
+    string filename,
+    IFormCollection form,
+    CancellationToken cancellationToken)
+{
+    var extension = Path.GetExtension(filename).ToLowerInvariant();
+
+    if (extension is ".pdf" or ".lpt" or ".txt")
+    {
+        await using var sourceStream = file.OpenReadStream();
+        await using var dptStream = form.Files.GetFile("dpt")?.OpenReadStream();
+        await using var templateStream = form.Files.GetFile("template")?.OpenReadStream();
+        var ladder = await LadderPipeline.BuildXmlAsync(sourceStream, filename, dptStream, templateStream, cancellationToken);
+        if (!ladder.Success)
+        {
+            return (null, filename, string.Empty, string.Empty, Results.Json(
+                new { error = ladder.Error ?? "Ladder conversion failed.", report = ladder.Report },
+                statusCode: StatusCodes.Status422UnprocessableEntity));
+        }
+
+        return (ladder.Xml!, Path.GetFileNameWithoutExtension(filename) + ".xml", ladder.Report, string.Empty, null);
+    }
+
+    await using var stream = file.OpenReadStream();
+    using var buffer = new MemoryStream();
+    await stream.CopyToAsync(buffer, cancellationToken);
+    var bytes = buffer.ToArray();
+
+    // A raw TriStation project container (.pt2/.pt2x) is decompiled to TriStation PLCopen XML.
+    if (Pt2Importer.LooksLikePt2(bytes))
+    {
+        var decompiled = await Pt2Importer.ConvertAsync(bytes, filename, cancellationToken);
+        if (!decompiled.Success)
+        {
+            return (null, filename, string.Empty, decompiled.Report, Results.Json(
+                new { error = decompiled.Error ?? "The TriStation project could not be decompiled.", report = decompiled.Report },
+                statusCode: StatusCodes.Status422UnprocessableEntity));
+        }
+
+        return (decompiled.Xml!, Path.GetFileNameWithoutExtension(filename) + ".xml", string.Empty, decompiled.Report, null);
+    }
+
+    // The inverse direction: a Siemens SimaticML export becomes TriStation PLCopen XML.
+    if (SimaticImporter.LooksLikeSimaticMl(bytes))
+    {
+
+        var imported = await SimaticImporter.ConvertAsync(bytes, filename, cancellationToken);
+        if (!imported.Success)
+        {
+            return (null, filename, string.Empty, imported.Report, Results.Json(
+                new { error = imported.Error ?? "The SimaticML export could not be translated.", report = imported.Report },
+                statusCode: StatusCodes.Status422UnprocessableEntity));
+        }
+
+        return (imported.Xml!, Path.GetFileNameWithoutExtension(filename) + ".xml", string.Empty, imported.Report, null);
+    }
+
+    if (!LooksLikeXml(bytes))
+    {
+        return (null, filename, string.Empty, string.Empty, Results.Json(
+            new
+            {
+                error = "The uploaded file is not TriStation PLCopen XML, and it was not recognized as a Siemens "
+                    + "SimaticML export or a TriStation project. " + DescribeUpload(bytes, filename) + " Supported inputs are a ladder PDF "
+                    + "(.pdf), a TRISTATION listing (.lpt/.txt), a TriStation XML export (.xml), a TriStation "
+                    + "project (.pt2/.pt2x), or a SimaticML export (the .zip of Blocks/Tags/UDTs from TIA Openness, "
+                    + "or a single block .xml).",
+
+            },
+            statusCode: StatusCodes.Status422UnprocessableEntity));
+    }
+
+    return (bytes, filename, string.Empty, string.Empty, null);
+}
+
+/// <summary>Builds a short, factual description of an unrecognized upload so the operator can see
+/// what was actually handed in (extension, container type, a peek at the bytes).</summary>
+static string DescribeUpload(byte[] bytes, string filename)
+{
+    var extension = Path.GetExtension(filename).ToLowerInvariant();
+    var shown = string.IsNullOrEmpty(extension) ? "(no extension)" : extension;
+
+    if (bytes.Length >= 2 && bytes[0] == (byte)'P' && bytes[1] == (byte)'K')
+    {
+        try
+        {
+            using var memory = new MemoryStream(bytes, writable: false);
+            using var archive = new System.IO.Compression.ZipArchive(memory, System.IO.Compression.ZipArchiveMode.Read);
+            var roots = archive.Entries
+                .Select(entry => entry.FullName.Replace('\\', '/').Split('/')[0])
+                .Where(name => name.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(8)
+                .ToArray();
+            var names = roots.Length > 0 ? string.Join(", ", roots) : "(empty)";
+            var looksProject = archive.Entries.Any(entry =>
+            {
+                var name = entry.FullName.Replace('\\', '/');
+                return name.EndsWith(".ap16", StringComparison.OrdinalIgnoreCase)
+                    || name.EndsWith(".ap17", StringComparison.OrdinalIgnoreCase)
+                    || name.EndsWith(".ap18", StringComparison.OrdinalIgnoreCase)
+                    || name.EndsWith(".ap19", StringComparison.OrdinalIgnoreCase)
+                    || name.EndsWith(".ap20", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("System/", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("IM/", StringComparison.OrdinalIgnoreCase);
+            });
+            return looksProject
+                ? $"It is a ZIP ({shown}) whose entries ({names}) look like a TIA Portal project, not an Openness export."
+                : $"It is a ZIP ({shown}) with entries: {names}.";
+        }
+        catch
+        {
+            return $"It is a ZIP ({shown}) that could not be read.";
+        }
+    }
+
+    if (Pt2Importer.LooksLikePt2(bytes))
+    {
+        return $"It is an OLE compound file ({shown}) that could not be read as a TriStation project.";
+    }
+
+    var preview = new string(bytes.Take(12).Select(b => b >= 32 && b < 127 ? (char)b : '.').ToArray());
+    return $"It has extension {shown} and starts with \"{preview}\".";
+}
+
+static bool LooksLikeXml(ReadOnlySpan<byte> bytes)
+{
+    var index = 0;
+    if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) index = 3;
+    while (index < bytes.Length && bytes[index] is 0x20 or 0x09 or 0x0A or 0x0D) index++;
+    return index < bytes.Length && bytes[index] == (byte)'<';
+}
+
+static void AddReportArtifact(List<object> artifacts, ConversionResult result)
+{
+    var report = result.Report;
+    if (string.IsNullOrEmpty(report)) return;
+
+    artifacts.Add(new
+    {
+        name = "conversion_report.txt",
+        mimeType = "text/plain",
+        kind = "report",
+        contentBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(report)),
+    });
+}
+
+static Dictionary<string, object?> BuildSummary(ConversionResult result) => new()
+{
+    ["blocks"] = result.Project.Blocks.Count,
+    ["udts"] = result.Project.DataTypes.Count,
+    ["tags"] = result.Project.IoPoints.Count + result.Project.GlobalVariables.Count,
+    ["approximations"] = result.Mapping.Count(TriconexToTia.Core.Enums.ConversionStatus.Approximated),
+    ["manualActions"] = result.Mapping.ManualActions.Count,
+    ["unrecognized"] = result.Project.UnrecognizedElements.Count,
+};
 
 static ConverterOptions ReadOptions(string? optionsJson, string? notes)
 {
@@ -191,6 +666,31 @@ static ConverterOptions ReadOptions(string? optionsJson, string? notes)
         {
             options.PlcCpu = plcCpu.GetString();
         }
+
+        // How FBD-language blocks are emitted. Without this the HTTP path could only ever produce
+        // SCL, so the web "Build openable TIA project" button could not draw FBD diagrams.
+        if (TryReadOptionString(root, "fbdOutput", "fbd_output", out var fbdOutput))
+        {
+            options.FbdOutput = fbdOutput.Trim().ToLowerInvariant() switch
+            {
+                "fbd" => FbdOutputMode.Fbd,
+                "auto" => FbdOutputMode.Auto,
+                "scl" => FbdOutputMode.Scl,
+                _ => options.FbdOutput,
+            };
+        }
+
+        // Which V16 box-template dialect to target; the importer's build decides this (V16.0 GA vs
+        // V16 Update 3). Aliases are accepted because the CLI spells the GA dialect "v16-ga".
+        if (TryReadOptionString(root, "fbdDialect", "fbd_dialect", out var fbdDialect))
+        {
+            options.FbdDialect = fbdDialect.Trim().ToLowerInvariant() switch
+            {
+                "v16-ga" or "v16ga" or "ga" or "v16.0-ga" => FbdBoxDialect.V16Ga,
+                "v16-update3" or "v16update3" or "update3" or "u3" => FbdBoxDialect.V16Update3,
+                _ => options.FbdDialect,
+            };
+        }
     }
     catch (JsonException)
     {
@@ -199,6 +699,25 @@ static ConverterOptions ReadOptions(string? optionsJson, string? notes)
 
     _ = notes;
     return options;
+}
+
+/// <summary>Reads a string option under either its camelCase or snake_case spelling.</summary>
+static bool TryReadOptionString(JsonElement root, string camelCase, string snakeCase, out string value)
+{
+    if (root.TryGetProperty(camelCase, out var camel) && camel.ValueKind == JsonValueKind.String)
+    {
+        value = camel.GetString()!;
+        return true;
+    }
+
+    if (root.TryGetProperty(snakeCase, out var snake) && snake.ValueKind == JsonValueKind.String)
+    {
+        value = snake.GetString()!;
+        return true;
+    }
+
+    value = string.Empty;
+    return false;
 }
 
 static byte[] BuildZip(ConversionResult result)
@@ -229,3 +748,6 @@ static long ReadLong(string name, long fallback)
     var raw = Environment.GetEnvironmentVariable(name);
     return long.TryParse(raw, out var value) && value > 0 ? value : fallback;
 }
+
+/// <summary>Exposed so integration tests can host the app with WebApplicationFactory.</summary>
+public partial class Program { }

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using TriconexToTia.Core.Enums;
 using TriconexToTia.Core.Interfaces;
 using TriconexToTia.Core.Results;
@@ -50,7 +50,22 @@ public sealed class ImportScriptGenerator : IGenerator
     ""Siemens TIA Openness"".
 
 .NOTES
-    The generated package must keep its folder layout: Blocks/, UDTs/, Tags/.
+    The generated package must keep its folder layout: UDTs/, Globals/, Tags/, Library/, Blocks/.
+
+    Import order is fixed and must not be reordered:
+
+        1. Library/  stand-in blocks for TriStation library blocks with no Siemens equivalent
+        2. UDTs/     user-defined types
+        3. Tags/     tag tables, including global tags
+        4. Globals/  the global data block
+        5. Blocks/   the converted blocks
+
+    Library/ comes first because those stand-ins are function blocks, and a block cannot
+    instantiate something that does not exist yet. Everything else is referenced from Blocks/,
+    which is imported last. Because Library/ is imported before UDTs/, a stand-in block must use
+    only elementary datatypes; if a stand-in ever needs a UDT parameter, that UDT must be
+    inlined or the stand-in must move into Blocks/.
+
     Hardware configuration is NOT created automatically unless -CpuOrderNumber is
     supplied; add the CPU and I/O modules first, or pass the order number.
 #>
@@ -72,16 +87,52 @@ if (-not (Test-Path -LiteralPath $opennessPath)) {
     exit 1
 }
 
+# TIA ships the Openness API across two folders: PublicAPI\V<VERSION> holds Siemens.Engineering.dll
+# while Bin\PublicAPI (recursively) holds its dependencies (Siemens.Engineering.Contract, the client
+# adapter, ...). Add-Type on its own cannot resolve those references, so pre-load every Openness
+# assembly into the LoadFrom context first; the caller's types then resolve against it.
+$script:OpennessProbeDirs = @()
+$script:OpennessProbeDirs += Split-Path -Parent $opennessPath
+$binPublicApi = Join-Path $TiaInstallPath ""Bin\PublicAPI""
+if (Test-Path -LiteralPath $binPublicApi) {
+    $script:OpennessProbeDirs += $binPublicApi
+    foreach ($child in Get-ChildItem -LiteralPath $binPublicApi -Directory -Recurse -ErrorAction SilentlyContinue) {
+        $script:OpennessProbeDirs += $child.FullName
+    }
+}
+foreach ($directory in $script:OpennessProbeDirs) {
+    Get-ChildItem -LiteralPath $directory -Filter *.dll -ErrorAction SilentlyContinue | ForEach-Object {
+        try { [System.Reflection.Assembly]::LoadFrom($_.FullName) | Out-Null } catch { }
+    }
+}
+
 Add-Type -Path $opennessPath
+
+function Get-OpennessService {
+    # PowerShell 5.1 cannot call a generic method with $obj.Method[T]() syntax (that was added
+    # in PS 7), and passing the type as an argument is not valid either, because GetService
+    # takes no parameters. Close the generic by hand and invoke it.
+    param($Object, [Type]$ServiceType)
+    $flags = [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Instance
+    $method = $Object.GetType().GetMethod('GetService', $flags)
+    if ($null -eq $method) {
+        throw ""'$($Object.GetType().FullName)' does not expose GetService().""
+    }
+    return $method.MakeGenericMethod($ServiceType).Invoke($Object, @())
+}
 
 function Get-PlcSoftware {
     param($Device)
     foreach ($item in $Device.DeviceItems) {
         try {
-            $container = $item.GetService([Siemens.Engineering.SW.ISoftwareContainer])
-            if ($null -ne $container -and $null -ne $container.Software) { return $container.Software }
+            $container = Get-OpennessService $item ([Siemens.Engineering.HW.Features.SoftwareContainer])
+            if ($null -ne $container -and $null -ne $container.Software) {
+                foreach ($software in @($container.Software)) {
+                    if ($software -is [Siemens.Engineering.SW.PlcSoftware]) { return $software }
+                }
+            }
         } catch {
-            # Not a software container; keep looking.
+            # Not a software container, or no PLC software behind it; keep looking.
         }
     }
     return $null
@@ -96,8 +147,19 @@ try {
         New-Item -ItemType Directory -Path $ProjectPath -Force | Out-Null
     }
 
-    Write-Host ""Creating project '$ProjectName' at '$fullProjectPath'..."" -ForegroundColor Cyan
-    $project = $tia.Projects.Create($fullProjectPath, $ProjectName)
+    $projectFile = Join-Path $fullProjectPath ($ProjectName + "".ap16"")
+    if (Test-Path -LiteralPath $fullProjectPath) {
+        $existing = Get-ChildItem -LiteralPath $fullProjectPath -Filter *.ap16 -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $existing) { $projectFile = $existing.FullName }
+    }
+    if (Test-Path -LiteralPath $projectFile) {
+        Write-Host ""Opening existing project '$projectFile'..."" -ForegroundColor Cyan
+        $project = $tia.Projects.Open($projectFile)
+    } else {
+        Write-Host ""Creating project '$ProjectName' at '$fullProjectPath'..."" -ForegroundColor Cyan
+        $projectDir = [System.IO.DirectoryInfo]::new($fullProjectPath)
+        $project = $tia.Projects.Create($projectDir, $ProjectName)
+    }
 
     $plcSoftware = $null
     if (-not [string]::IsNullOrWhiteSpace($CpuOrderNumber)) {
@@ -116,44 +178,139 @@ try {
         return
     }
 
-    # 1. UDTs first — blocks and tags may reference them.
-    $udtDir = Join-Path $ScriptDir ""UDTs""
-    if (Test-Path -LiteralPath $udtDir) {
-        Write-Host ""Importing UDTs..."" -ForegroundColor Cyan
-        Get-ChildItem -LiteralPath $udtDir -Filter *.xml | Sort-Object Name | ForEach-Object {
-            Write-Host ""  UDT: $($_.Name)""
-            $plcSoftware.TypeGroup.Types.Import($_.FullName, [Siemens.Engineering.ImportOptions]::Override)
-        }
-    }
-
-    # 2. Global tag tables.
-    $tagDir = Join-Path $ScriptDir ""Tags""
-    if (Test-Path -LiteralPath $tagDir) {
-        Write-Host ""Importing tag tables..."" -ForegroundColor Cyan
-        Get-ChildItem -LiteralPath $tagDir -Filter *.xml | Sort-Object Name | ForEach-Object {
-            Write-Host ""  Tags: $($_.Name)""
-            $plcSoftware.TagTableGroup.TagTables.Import($_.FullName, [Siemens.Engineering.ImportOptions]::Override)
-        }
-    }
-
-    # 3. SCL blocks via external source files, then generate.
-    $blockDir = Join-Path $ScriptDir ""Blocks""
-    if (Test-Path -LiteralPath $blockDir) {
-        Write-Host ""Importing blocks..."" -ForegroundColor Cyan
+    # 1. Stand-in blocks for TriStation library blocks with no Siemens equivalent. These are
+    #    function blocks too, so they must exist before anything that instantiates them.
+    $libraryDir = Join-Path $ScriptDir ""Library""
+    if (Test-Path -LiteralPath $libraryDir) {
+        Write-Host ""Importing stand-in library blocks..."" -ForegroundColor Cyan
         $sourceGroup = $plcSoftware.ExternalSourceGroup
-        Get-ChildItem -LiteralPath $blockDir -Filter *.scl | Sort-Object Name | ForEach-Object {
-            Write-Host ""  Block: $($_.Name)""
+        Get-ChildItem -LiteralPath $libraryDir -Filter *.scl | Sort-Object Name | ForEach-Object {
+            Write-Host ""  Library block: $($_.Name)""
             $external = $sourceGroup.ExternalSources.CreateFromFile($_.BaseName, $_.FullName)
             $external.GenerateBlocksFromSource()
         }
     }
 
-    # 4. Compile.
+    # 2. UDTs. Blocks and tags may reference them.
+    $udtDir = Join-Path $ScriptDir ""UDTs""
+    if (Test-Path -LiteralPath $udtDir) {
+        Write-Host ""Importing UDTs..."" -ForegroundColor Cyan
+        Get-ChildItem -LiteralPath $udtDir -Filter *.xml | Sort-Object Name | ForEach-Object {
+            Write-Host ""  UDT: $($_.Name)""
+            $plcSoftware.TypeGroup.Types.Import(
+                (New-Object System.IO.FileInfo($_.FullName)),
+                [Siemens.Engineering.ImportOptions]::Override)
+        }
+    }
+
+    # 3. Tag tables, including the global tags.
+    $tagDir = Join-Path $ScriptDir ""Tags""
+    if (Test-Path -LiteralPath $tagDir) {
+        Write-Host ""Importing tag tables..."" -ForegroundColor Cyan
+        Get-ChildItem -LiteralPath $tagDir -Filter *.xml | Sort-Object Name | ForEach-Object {
+            Write-Host ""  Tags: $($_.Name)""
+            $plcSoftware.TagTableGroup.TagTables.Import(
+                (New-Object System.IO.FileInfo($_.FullName)),
+                [Siemens.Engineering.ImportOptions]::Override)
+        }
+    }
+
+    # 4. Global data block for address-free globals. Blocks reference it as
+    #    ""GlobalData"".Name, so it only has to exist before Blocks/. The generator emits this as
+    #    SCL source (DATA_BLOCK ... END_DATA_BLOCK); a SimaticML XML block is also accepted, so
+    #    sniff the first non-BOM character to pick the right TIA API.
+    $globalDir = Join-Path $ScriptDir ""Globals""
+    if (Test-Path -LiteralPath $globalDir) {
+        Write-Host ""Importing global data block..."" -ForegroundColor Cyan
+        $globalSources = $plcSoftware.ExternalSourceGroup
+        Get-ChildItem -LiteralPath $globalDir -Filter *.db | Sort-Object Name | ForEach-Object {
+            $globalText = [System.IO.File]::ReadAllText($_.FullName).TrimStart([char]0xFEFF).TrimStart()
+            if ($globalText.StartsWith(""<"")) {
+                Write-Host ""  Global block: $($_.Name)""
+                $plcSoftware.BlockGroup.Blocks.Import(
+                    (New-Object System.IO.FileInfo($_.FullName)),
+                    [Siemens.Engineering.ImportOptions]::Override)
+            } else {
+                Write-Host ""  Global source: $($_.Name)""
+                # TIA identifies the language of an external source by its extension, so copy the
+                # .db to a .scl before handing it over.
+                $globalTemp = Join-Path ([System.IO.Path]::GetTempPath()) ($_.BaseName + "".scl"")
+                Copy-Item -LiteralPath $_.FullName -Destination $globalTemp -Force
+                $external = $globalSources.ExternalSources.CreateFromFile($_.BaseName, (New-Object System.IO.FileInfo($globalTemp)))
+                $external.GenerateBlocksFromSource()
+                Remove-Item -LiteralPath $globalTemp -Force
+            }
+        }
+    }
+
+    # 5. Blocks in dependency order. ImportOrder.json lists every block source (user FBs/FCs, wrapper
+    #    FBs, instance DBs and organization blocks) in the order TIA must import them, because a
+    #    source may only reference a block that already exists. Library/ and Globals/ were imported
+    #    above, so those manifest entries are skipped here.
+    $blockDir = Join-Path $ScriptDir ""Blocks""
+    if (Test-Path -LiteralPath $blockDir) {
+        $sourceGroup = $plcSoftware.ExternalSourceGroup
+        $orderPath = Join-Path $ScriptDir ""ImportOrder.json""
+        $importOrder = if (Test-Path -LiteralPath $orderPath) { (Get-Content -LiteralPath $orderPath -Raw | ConvertFrom-Json).order } else { @() }
+        foreach ($item in $importOrder) {
+            if (-not $item.path.StartsWith(""Blocks/"")) { continue }
+            $full = Join-Path $ScriptDir $item.path
+            if (-not (Test-Path -LiteralPath $full)) { continue }
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($item.path)
+            if ($item.kind -eq 'scl') {
+                Write-Host ""  Source: $($item.path)""
+                $external = $sourceGroup.ExternalSources.CreateFromFile($base, $full)
+                $external.GenerateBlocksFromSource()
+            } else {
+                Write-Host ""  Block: $($item.path)""
+                $plcSoftware.BlockGroup.Blocks.Import(
+                    (New-Object System.IO.FileInfo($full)),
+                    [Siemens.Engineering.ImportOptions]::Override)
+            }
+        }
+
+
+        # 5b. FBD round-trip check: each SimaticML block that carried a programming language must
+        #     have come back as that language in the target, not silently rewritten to SCL.
+        Write-Host ""Verifying FBD round-trip (read-back)..."" -ForegroundColor Cyan
+        $langOk = $true
+        $langChecked = 0
+        Get-ChildItem -LiteralPath $blockDir -Filter *.xml | Sort-Object Name | ForEach-Object {
+            $content = Get-Content -LiteralPath $_.FullName -Raw
+            $languageMatch = [regex]::Match($content, '<ProgrammingLanguage>([^<]+)</ProgrammingLanguage>')
+            if (-not $languageMatch.Success) { return }
+            $expected = $languageMatch.Groups[1].Value
+            $block = $plcSoftware.BlockGroup.Blocks.Find($_.BaseName)
+            if ($null -eq $block) {
+                Write-Warning ""    $($_.BaseName) = missing from the target project.""
+                $langOk = $false
+                return
+            }
+            $actual = """"
+            try { $actual = [string]$block.ProgrammingLanguage } catch { }
+            $langChecked++
+            if ($actual -ieq $expected) {
+                Write-Host ""    $($_.BaseName) = $actual"" -ForegroundColor Green
+            } else {
+                Write-Warning ""    $($_.BaseName) = $actual (expected $expected).""
+                $langOk = $false
+            }
+        }
+        if ($langChecked -gt 0 -and $langOk) {
+            Write-Host ""FBD round-trip passed: all $langChecked SimaticML blocks kept their programming language."" -ForegroundColor Green
+        } elseif ($langChecked -gt 0) {
+            Write-Warning ""FBD round-trip FAILED: at least one SimaticML block lost its language.""
+        }
+    }
+    # 6. Compile.
     Write-Host ""Compiling..."" -ForegroundColor Cyan
-    $compileService = $plcSoftware.GetService([Siemens.Engineering.Compiler.CompilerService])
-    $result = $compileService.Compile()
+    $compilable = Get-OpennessService $plcSoftware ([Siemens.Engineering.Compiler.ICompilable])
+    $result = $compilable.Compile()
     if ($result.State -ne [Siemens.Engineering.Compiler.CompilerResultState]::Success) {
-        Write-Warning ""Compilation finished with state: $($result.State)""
+        Write-Warning ""Compilation finished with state: $($result.State) ($($result.ErrorCount) error(s), $($result.WarningCount) warning(s))""
+        foreach ($message in $result.Messages) {
+            Write-Warning ""  [$($message.State)] $($message.Description)""
+        }
     }
 
     Write-Host ""Saving project..."" -ForegroundColor Cyan
@@ -172,3 +329,5 @@ finally {
 }
 ";
 }
+
+

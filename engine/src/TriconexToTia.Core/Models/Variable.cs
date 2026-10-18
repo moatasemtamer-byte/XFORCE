@@ -27,4 +27,24 @@ public class Variable
     public string? MappingNote { get; set; }
 
     public string EffectiveTypeName => MappedTypeName ?? TypeName;
+
+    /// <summary>Declared inside a constant group (<c>localVars/@constant</c>).</summary>
+    public bool Constant { get; set; }
+
+    /// <summary>PLCopen address element, when the source supplies one.</summary>
+    public string? Address { get; set; }
+
+    /// <summary>Initial value text from <c>simpleValue/@value</c>.</summary>
+    public string? InitialValue { get; set; }
+
+    /// <summary>Documentation text; also used as the emitted comment.</summary>
+    public string? Documentation { get; set; }
+
+    /// <summary>Type came from <c>&lt;derived name="..."/&gt;</c>: an FB instance or a data type.</summary>
+    public bool IsDerivedType { get; set; }
+
+    public bool IsArray { get; set; }
+
+    /// <summary>Array bounds as "lower..upper", comma separated per dimension.</summary>
+    public string? ArrayBounds { get; set; }
 }

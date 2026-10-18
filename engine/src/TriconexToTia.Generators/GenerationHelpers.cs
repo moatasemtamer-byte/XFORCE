@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security;
 using System.Text;
 
@@ -39,4 +40,20 @@ internal static class GenerationHelpers
         mapped.Length >= 2 && mapped.StartsWith('"') && mapped.EndsWith('"')
             ? mapped[1..^1]
             : mapped;
+
+    /// <summary>Turns a TriStation block name or annotation into a valid SCL identifier.</summary>
+    public static string SanitizeIdentifier(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+
+        var builder = new StringBuilder(name.Length);
+        foreach (var character in name.Trim())
+        {
+            builder.Append(char.IsLetterOrDigit(character) || character == '_' ? character : '_');
+        }
+
+        return builder.ToString().Trim('_');
+    }
+
+    public static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
 }

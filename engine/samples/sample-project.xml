@@ -1,61 +1,94 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project name="DemoProject">
-  <DataTypes>
-    <DataType name="PumpData" kind="STRUCT">
-      <Member name="Speed" type="REAL" />
-      <Member name="Running" type="BOOL" />
-      <Member name="StartTime" type="TIME_OF_DAY" />
-    </DataType>
-  </DataTypes>
-  <FunctionBlocks>
-    <FunctionBlock name="PumpCtrl" language="ST">
-      <Variables>
-        <Variable name="Start" type="BOOL" direction="IN" comment="Start command" />
-        <Variable name="Running" type="BOOL" direction="OUT" />
-        <Variable name="Fault" type="BOOL" direction="IN_OUT" />
-        <Variable name="Timer1" type="TON" />
-      </Variables>
-      <Code><![CDATA[
-IF Start THEN
-  Running := TRUE;
-  Timer1(IN := TRUE, PT := T#5S);
-ELSE
-  Running := FALSE;
-END_IF;
-]]></Code>
-    </FunctionBlock>
-  </FunctionBlocks>
-  <Functions>
-    <Function name="CalcFlow" language="ST" returnType="REAL">
-      <Variables>
-        <Variable name="Area" type="REAL" direction="IN" />
-        <Variable name="Velocity" type="REAL" direction="IN" />
-        <Variable name="Temp" type="REAL" />
-      </Variables>
-      <Code><![CDATA[
-Temp := Area * Velocity;
-CalcFlow := Temp;
-]]></Code>
-    </Function>
-  </Functions>
-  <Programs>
-    <Program name="MainControl" language="ST">
-      <Variables>
-        <Variable name="Pump" type="PumpCtrl" />
-      </Variables>
-      <Code><![CDATA[
-Pump.Start := TRUE;
-Pump.Running := FALSE;
-]]></Code>
-    </Program>
-  </Programs>
-  <GlobalVariables>
-    <Variable name="GlobalCounter" type="INT" />
-    <Variable name="SensorValue" type="REAL" />
-  </GlobalVariables>
-  <IOConfiguration>
-    <IOPoint name="PumpStart" type="BOOL" direction="input" />
-    <IOPoint name="PumpRun" type="BOOL" direction="output" />
-    <IOPoint name="PumpSpeed" type="REAL" direction="input" signal="analog" />
-  </IOConfiguration>
-</Project>
+<!--
+  Sample TriStation/PLCopen (tc6) export used to exercise the converter end to end.
+  Pass this file as the input argument of the CLI to produce a package.
+
+  The I/O points live in globalVars with a ts:TAGNAME block, which is what a real
+  TriStation export carries. GlobalTags.xml is therefore the complete tag table.
+-->
+<project xmlns="http://www.plcopen.org/xml/tc6.xsd" xmlns:ts="http://www.triconex.com/controller/03/2008">
+  <types>
+    <dataTypes>
+      <dataType name="PumpData">
+        <baseType>
+          <struct>
+            <variable name="Speed"><type><REAL /></type></variable>
+            <variable name="Running"><type><BOOL /></type></variable>
+            <variable name="StartTime"><type><TIME_OF_DAY /></type></variable>
+            <variable name="Samples">
+              <type>
+                <array>
+                  <dimension><lower>1</lower><upper>8</upper></dimension>
+                  <INT />
+                </array>
+              </type>
+            </variable>
+            <variable name="Trend"><type><derived name="PumpData" /></type></variable>
+          </struct>
+        </baseType>
+      </dataType>
+    </dataTypes>
+    <pous>
+      <pou name="PumpCtrl" pouType="functionBlock">
+        <interface>
+          <inputVars>
+            <variable name="Start"><type><BOOL /></type></variable>
+          </inputVars>
+          <outputVars>
+            <variable name="Running"><type><BOOL /></type></variable>
+          </outputVars>
+          <localVars>
+            <variable name="Timer1"><type><derived name="TON" /></type></variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST><![CDATA[IF Start THEN Timer1(IN := TRUE, PT := T#5S); Running := TRUE; ELSE Running := FALSE; END_IF;]]></ST>
+        </body>
+      </pou>
+      <pou name="CalcFlow" pouType="function">
+        <interface>
+          <inputVars>
+            <variable name="Area"><type><REAL /></type></variable>
+            <variable name="Velocity"><type><REAL /></type></variable>
+          </inputVars>
+          <inOutVars>
+            <variable name="Temp"><type><REAL /></type></variable>
+          </inOutVars>
+          <returnType><REAL /></returnType>
+        </interface>
+        <body>
+          <ST><![CDATA[Temp := Area * Velocity; CalcFlow := Temp;]]></ST>
+        </body>
+      </pou>
+      <pou name="MainControl" pouType="program">
+        <interface>
+          <localVars>
+            <variable name="Pump"><type><derived name="PumpCtrl" /></type></variable>
+            <variable name="Data"><type><derived name="PumpData" /></type></variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST><![CDATA[Pump.Start := TRUE; Pump.Running := FALSE;]]></ST>
+        </body>
+      </pou>
+    </pous>
+  </types>
+  <instances>
+    <configurations>
+      <configuration name="MainConfiguration">
+        <resource name="Res1">
+          <task name="MainTask" interval="100" />
+          <globalVars>
+            <variable name="GlobalCounter"><type><INT /></type></variable>
+            <variable name="AI_RAW_FIELD">
+              <type><DINT /></type>
+              <ts:TAGNAME>
+                <ts:POINT_ASSIGNMENT PointType="MEMORY" AliasType="UNSHADOWED" PhysicalAddress="MIN.0007" />
+              </ts:TAGNAME>
+            </variable>
+          </globalVars>
+        </resource>
+      </configuration>
+    </configurations>
+  </instances>
+</project>

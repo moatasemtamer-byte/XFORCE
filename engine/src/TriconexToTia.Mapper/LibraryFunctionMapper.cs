@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using TriconexToTia.Core.Enums;
 using TriconexToTia.Core.Results;
 
@@ -59,7 +59,7 @@ public sealed class LibraryFunctionMapper
                     {
                         Title = $"{name} in \"{blockName}\"",
                         Reason = rule.Note ?? "No Siemens equivalent.",
-                        Action = "Replace with the equivalent Siemens instruction and re-test.",
+                        Action = rule.Action ?? "Replace with the equivalent Siemens instruction and re-test.",
                         SourceLine = sourceLine,
                     });
                 }
@@ -90,3 +90,4 @@ public sealed class LibraryFunctionMapper
         }
     }
 }
+

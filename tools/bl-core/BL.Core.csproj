@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Cross-platform build of the UnityLadderConverter business layer (BL).
+
+    The vendor's original project (SE_BusinessControlLayer) targeted .NET Framework 4.8
+    and the WinForms/WPF/ClickOnce surface made it Windows-only. The sources in src\ are
+    byte-for-byte copies of the vendor tree with a handful of platform shims applied
+    (see PORTING.md); everything else is unchanged.
+
+    Building it against modern .NET lets the headless engine run natively on Linux.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net7.0</TargetFramework>
+    <AssemblyName>BL.Core</AssemblyName>
+    <RootNamespace>BL</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <NoWarn>$(NoWarn);CS0618;CS1591;SYSLIB0014;CA1416;CS0108;CS0168;CS0219;CS0162;CS0169;CS0649;CS0414;CS0067;CS0165;CS0693;CS8981</NoWarn>
+    <BlDir Condition="'$(BlDir)' == ''">$(MSBuildThisFileDirectory)..\vendor</BlDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src\**\*.cs" />
+    <EmbeddedResource Include="src\Properties\Resources.resx">
+      <LogicalName>BL.Properties.Resources.resources</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="EPPlus">
+      <HintPath>$(BlDir)\EPPlus.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
