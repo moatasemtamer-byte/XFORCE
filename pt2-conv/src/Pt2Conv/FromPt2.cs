@@ -126,6 +126,16 @@ public sealed class FromPt2
                 pouType = b.PouType,
                 returnType = b.ReturnType,
                 title = b.Title,
+                drawing = new
+                {
+                    number = b.DrawingNumber,
+                    title = b.DrawingTitle,
+                    size = b.DrawingSize,
+                    sheetTemplate = b.SheetTemplate,
+                    rev = b.Revision,
+                    hZones = b.HZoneCount,
+                    vZones = b.VZoneCount,
+                },
                 vars = b.Vars.Select(v => new
                 {
                     name = v.Name,
@@ -141,7 +151,7 @@ public sealed class FromPt2
                 {
                     number = s.Number,
                     title = s.Title,
-                    elems = s.Elems.Select(ElemJson).ToArray(),
+                    elems = s.Elems.Select(e => ElemJson(e, b, s, projName, b.Sheets.Count)).ToArray(),
                     wires = s.Wires.Select(w => new
                     {
                         id = w.OldId,
@@ -149,6 +159,7 @@ public sealed class FromPt2
                         srcPin = w.SrcPin,
                         sinkId = w.SinkId,
                         sinkPin = w.SinkPin,
+                        positions = w.Positions.Select(p => new[] { p.X, p.Y }).ToArray(),
                     }).ToArray(),
                 }).ToArray(),
             })
@@ -169,45 +180,89 @@ public sealed class FromPt2
         return 0;
     }
 
-    private static object ElemJson(Pt2Elem e) => e switch
+    private static object ElemJson(Pt2Elem e, Pt2Block b, Pt2Sheet s, string projName, int sheetCount)
     {
-        Pt2BlockElem b => new
+        switch (e)
         {
-            kind = "block",
-            id = b.OldId,
-            x = b.X,
-            y = b.Y,
-            w = b.W,
-            h = b.H,
-            typeName = b.TypeName,
-            instance = b.Instance,
-            inputs = b.Inputs.Select(p => new { name = p.Name, wire = p.Wire }).ToArray(),
-            outputs = b.Outputs.ToArray(),
-        },
-        Pt2VarElem v => new
-        {
-            kind = "var",
-            id = v.OldId,
-            x = v.X,
-            y = v.Y,
-            w = v.W,
-            h = v.H,
-            name = v.Name,
-            inWire = v.InWire,
-            outWire = v.OutWire,
-        },
-        Pt2CommentElem c => new
-        {
-            kind = "comment",
-            id = c.OldId,
-            x = c.X,
-            y = c.Y,
-            w = c.W,
-            h = c.H,
-            text = c.Text,
-        },
-        _ => new { kind = "unknown", id = e.OldId, x = e.X, y = e.Y, w = e.W, h = e.H },
-    };
+            case Pt2BlockElem blk:
+                return new
+                {
+                    kind = "block",
+                    id = blk.OldId,
+                    x = blk.RawX,
+                    y = blk.RawY,
+                    w = blk.RawW,
+                    h = blk.RawH,
+                    typeName = blk.TypeName,
+                    instance = blk.Instance,
+                    isFunction = blk.IsFunction,
+                    inputs = blk.Inputs.Select(p => new { name = p.Name, wire = p.Wire }).ToArray(),
+                    outputs = blk.Outputs.ToArray(),
+                };
+
+            case Pt2VarElem v:
+            {
+                string annotation = ExpandMacros(v.Annotation, b, s, projName, sheetCount);
+                if (v.Annotation.Contains("DESCRIPTION"))
+                {
+                    string desc = b.Vars.FirstOrDefault(x => string.Equals(x.Name, v.Name, StringComparison.OrdinalIgnoreCase))?.Desc ?? "";
+                    annotation = annotation.Replace("%DESCRIPTION", desc).Trim();
+                }
+                return new
+                {
+                    kind = "var",
+                    id = v.OldId,
+                    x = v.RawX,
+                    y = v.RawY,
+                    w = v.RawW,
+                    h = v.RawH,
+                    name = v.Name,
+                    varType = v.VarType,
+                    annotation,
+                    annotate = v.Annotate,
+                    inWire = v.InWire,
+                    outWire = v.OutWire,
+                };
+            }
+
+            case Pt2CommentElem c:
+                return new
+                {
+                    kind = "comment",
+                    id = c.OldId,
+                    x = c.RawX,
+                    y = c.RawY,
+                    w = c.RawW,
+                    h = c.RawH,
+                    text = c.ExpandMacros ? ExpandMacros(c.Text, b, s, projName, sheetCount) : c.Text,
+                    border = c.Border,
+                    align = c.Align,
+                    textSize = c.TextSize,
+                    behindLogic = c.BehindLogic,
+                };
+
+            default:
+                return new { kind = "unknown", id = e.OldId, x = e.RawX, y = e.RawY, w = e.RawW, h = e.RawH };
+        }
+    }
+
+    private static string ExpandMacros(string text, Pt2Block b, Pt2Sheet s, string projName, int sheetCount)
+    {
+        if (text.IndexOf('%') < 0) return text;
+        string sheetTitle = string.IsNullOrWhiteSpace(s.Title)
+            ? (s.Number == 1 ? b.Title : "")
+            : s.Title;
+        return text
+            .Replace("%PROJECT_NAME", projName)
+            .Replace("%ELEMENT_NAME", b.Name)
+            .Replace("%DRAWING_TITLE", b.DrawingTitle)
+            .Replace("%DRAWING_NUMBER", b.DrawingNumber)
+            .Replace("%DRAWING_SIZE", b.DrawingSize)
+            .Replace("%REVISION", b.Revision)
+            .Replace("%SHEET_TITLE", sheetTitle)
+            .Replace("%SHEET_NUMBER", s.Number.ToString())
+            .Replace("%SHEET_COUNT", sheetCount.ToString());
+    }
 
     // ---------------------------------------------------------------- container
 
@@ -250,9 +305,14 @@ public sealed class FromPt2
         if (lines.Length < 2) return tags;
 
         var header = CsvFields(lines[1]);
-        int idx(string col) => Array.FindIndex(header, h => h.Equals(col, StringComparison.OrdinalIgnoreCase));
-        int iName = idx("Tagname"), iType = idx("DataType"), iDesc = idx("Description"), iAddr = idx("Address");
-        if (iName < 0) return tags;
+        var col = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int h = 0; h < header.Length; h++) col[header[h]] = h;
+        if (!col.ContainsKey("Tagname")) return tags;
+
+        // Every column the TriStation export reads back into <ts:TAGNAME>. The CSV is the
+        // only place the point configuration survives; reading just Name/Type/Desc/Address
+        // (as this used to) silently discarded ~56 of the 60 columns.
+        string Get(string[] f, string name) => col.TryGetValue(name, out var c) && c < f.Length ? f[c] : "";
 
         for (int i = 2; i < lines.Length; i++)
         {
@@ -262,15 +322,61 @@ public sealed class FromPt2
             // (notably the "</Tags>" footer) instead of reading it as a tag name.
             if (!lines[i].StartsWith("\"")) continue;
             var f = CsvFields(lines[i]);
-            if (f.Length <= iName) continue;
-            string name = f[iName];
+            string name = Get(f, "Tagname");
             if (string.IsNullOrWhiteSpace(name)) continue;
             tags.Add(new Pt2Tag
             {
                 Name = name,
-                Type = iType >= 0 && f.Length > iType ? f[iType] : "",
-                Desc = iDesc >= 0 && f.Length > iDesc ? f[iDesc] : "",
-                Address = iAddr >= 0 && f.Length > iAddr ? f[iAddr] : "",
+                Type = Get(f, "DataType"),
+                Desc = Get(f, "Description"),
+                Group1 = Get(f, "Group1"),
+                Group2 = Get(f, "Group2"),
+                InitialValue = Get(f, "InitialValue"),
+                IsSafety = Get(f, "IsSafety"),
+                SharedRead = Get(f, "SharedRead"),
+                EnableMultipleWrites = Get(f, "EnableMultipleWrites"),
+                AliasNumberSelection = Get(f, "AliasNumberSelection"),
+                UserAliasLegacy = Get(f, "UserAliasLegacy"),
+                UserAliasExtended = Get(f, "UserAliasExtended"),
+                AliasType = Get(f, "AliasType"),
+                Location = Get(f, "Location"),
+                Address = Get(f, "Address"),
+                PhysicalAddress = Get(f, "PhysicalAddress"),
+                MinimumValue = Get(f, "MinimumValue"),
+                MaximumValue = Get(f, "MaximumValue"),
+                Precision = Get(f, "Precision"),
+                DisableScaling = Get(f, "DisableScaling"),
+                StateNameTRUE = Get(f, "StateNameTRUE"),
+                ColorTRUE = Get(f, "ColorTRUE"),
+                StateNameFALSE = Get(f, "StateNameFALSE"),
+                ColorFALSE = Get(f, "ColorFALSE"),
+                Area = Get(f, "Area"),
+                Equipment = Get(f, "Equipment"),
+                SIFName = Get(f, "SIFName"),
+                IOModuleType = Get(f, "IOModuleType"),
+                MinimumTriggerTime = Get(f, "MinimumTriggerTime"),
+                SOEDeadTime = Get(f, "SOEDeadTime"),
+                R_Adjust = Get(f, "R_Adjust"),
+                ShortedThreshold = Get(f, "ShortedThreshold"),
+                OpenThreshold = Get(f, "OpenThreshold"),
+                AI_FilterType = Get(f, "AI_FilterType"),
+                AI_ClampEngineeringVal = Get(f, "AI_ClampEngineeringVal"),
+                AI_FieldFaultMonitor = Get(f, "AI_FieldFaultMonitor"),
+                AI_NamurHighLimit = Get(f, "AI_NamurHighLimit"),
+                AI_NamurLowLimit = Get(f, "AI_NamurLowLimit"),
+                AI_MinimumRawValue = Get(f, "AI_MinimumRawValue"),
+                AI_MaximumRawValue = Get(f, "AI_MaximumRawValue"),
+                AI_MinimumEngValue = Get(f, "AI_MinimumEngValue"),
+                AI_MaximumEngValue = Get(f, "AI_MaximumEngValue"),
+                HART_Enable = Get(f, "HART_Enable"),
+                HART_MonitorDeviceHealth = Get(f, "HART_MonitorDeviceHealth"),
+                HART_MonitorConfigChanges = Get(f, "HART_MonitorConfigChanges"),
+                HART_LockConfiguration = Get(f, "HART_LockConfiguration"),
+                Class = Get(f, "Class"),
+                SOEFlags = Get(f, "SOEFlags"),
+                PI_PointType = Get(f, "PI_PointType"),
+                PI_PointGearTeeth = Get(f, "PI_PointGearTeeth"),
+                PI_PointGearRatio = Get(f, "PI_PointGearRatio"),
             });
         }
         return tags;
@@ -289,7 +395,10 @@ public sealed class FromPt2
             {
                 if (ch == '"')
                 {
-                    if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
+                    // Keep the doubled quote verbatim ("" stays ""). The official XMLImportExport
+                    // export reproduces the raw CSV field text in the tag CDATA, e.g. a CSV field
+                    // """NO FLAME"" LAMP" becomes CDATA ""NO FLAME"" LAMP - not "NO FLAME" LAMP.
+                    if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append("\"\""); i++; }
                     else quoted = false;
                 }
                 else sb.Append(ch);
@@ -383,7 +492,16 @@ public sealed class FromPt2
             Name = (string?)root.Attribute("pouName") ?? folder,
             PouType = MapPouType((string?)root.Attribute("pouType")),
             Title = (string?)root.Attribute("drawingTitle") ?? "",
+            DrawingNumber = (string?)root.Attribute("drawingNumber") ?? "",
+            DrawingTitle = (string?)root.Attribute("drawingTitle") ?? "",
+            DrawingSize = (string?)root.Attribute("drawingSize") ?? "D",
+            SheetTemplate = (string?)root.Attribute("sheetTemplate") ?? "",
+            Revision = (string?)root.Attribute("rev") ?? "",
+            HZoneCount = Int(root, "hZoneCount"),
+            VZoneCount = Int(root, "vZoneCount"),
         };
+        if (block.HZoneCount <= 0) block.HZoneCount = 16;
+        if (block.VZoneCount <= 0) block.VZoneCount = 8;
 
         var decl = Child(root, "Collection", "declarations");
         if (decl != null)
@@ -434,6 +552,15 @@ public sealed class FromPt2
         return block;
     }
 
+    private static void Place(Pt2Elem e, XElement c)
+    {
+        int rx = Int(c, "posX"), ry = Int(c, "posY");
+        int rw = Int(c, "width"), rh = Int(c, "height");
+        e.RawX = rx; e.RawY = ry; e.RawW = rw; e.RawH = rh;
+        e.X = Pos(rx); e.Y = Pos(ry);
+        e.W = Math.Max(1, Size(rw)); e.H = Math.Max(1, Size(rh));
+    }
+
     private static void ReadSheet(Pt2Sheet sheet, XElement displayables)
     {
         foreach (var c in displayables.Elements().Where(e => e.Name.LocalName == "Class"))
@@ -447,13 +574,11 @@ public sealed class FromPt2
                     var b = new Pt2BlockElem
                     {
                         OldId = Int(c, "localId"),
-                        X = Pos(Int(c, "posX")),
-                        Y = Pos(Int(c, "posY")),
-                        W = Math.Max(1, Size(Int(c, "width"))),
-                        H = Math.Max(1, Size(Int(c, "height"))),
                         TypeName = (string?)c.Attribute("typeName") ?? "",
                         Instance = (string?)c.Attribute("instanceName") ?? "",
+                        IsFunction = ct == "CFBDFunctionXml",
                     };
+                    Place(b, c);
                     var inputs = Child(c, "Collection", "inputs");
                     if (inputs != null)
                         foreach (var pin in inputs.Elements().Where(e => e.Name.LocalName == "Class"))
@@ -473,17 +598,18 @@ public sealed class FromPt2
                 case "CFBDOutVarXml":
                 case "CFBDInOutVarXml":
                 {
-                    sheet.Elems.Add(new Pt2VarElem
+                    var v = new Pt2VarElem
                     {
                         OldId = Int(c, "localId"),
-                        X = Pos(Int(c, "posX")),
-                        Y = Pos(Int(c, "posY")),
-                        W = Math.Max(1, Size(Int(c, "width"))),
-                        H = Math.Max(1, Size(Int(c, "height"))),
                         Name = (string?)c.Attribute("varName") ?? "",
+                        VarType = (string?)c.Attribute("varType") ?? "",
+                        Annotation = (string?)c.Attribute("annotation") ?? "",
+                        Annotate = string.Equals((string?)c.Attribute("annotate"), "True", StringComparison.OrdinalIgnoreCase),
                         InWire = AttrInt(c, "inConnectId"),
                         OutWire = AttrInt(c, "outConnectId"),
-                    });
+                    };
+                    Place(v, c);
+                    sheet.Elems.Add(v);
                     break;
                 }
                 case "CDGMWireXml":
@@ -497,20 +623,30 @@ public sealed class FromPt2
                         if (embed == "input") { w.SrcId = id; w.SrcPin = pin; }
                         else if (embed == "output") { w.SinkId = id; w.SinkPin = pin; }
                     }
+                    var positions = Child(c, "Collection", "positions");
+                    if (positions != null)
+                    {
+                        foreach (var p in positions.Elements().Where(e => e.Name.LocalName == "Class"))
+                            w.Positions.Add((Int(p, "posX"), Int(p, "posY")));
+                    }
                     sheet.Wires.Add(w);
                     break;
                 }
                 case "CDGMCommentXml":
                 {
-                    sheet.Elems.Add(new Pt2CommentElem
+                    var comment = new Pt2CommentElem
                     {
                         OldId = Int(c, "localId"),
-                        X = Pos(Int(c, "posX")),
-                        Y = Pos(Int(c, "posY")),
-                        W = Math.Max(1, Size(Int(c, "width"))),
-                        H = Math.Max(1, Size(Int(c, "height"))),
                         Text = c.Descendants().FirstOrDefault(e => e.Name.LocalName == "CData")?.Value.Trim() ?? "",
-                    });
+                        Border = (string?)c.Attribute("border") ?? "Single",
+                        Align = (string?)c.Attribute("textAlignment") ?? "Left",
+                        TextSize = Int(c, "textSize"),
+                        BehindLogic = string.Equals((string?)c.Attribute("behindLogic"), "True", StringComparison.OrdinalIgnoreCase),
+                        ExpandMacros = string.Equals((string?)c.Attribute("expandMacros"), "True", StringComparison.OrdinalIgnoreCase),
+                    };
+                    if (comment.TextSize <= 0) comment.TextSize = 10;
+                    Place(comment, c);
+                    sheet.Elems.Add(comment);
                     break;
                 }
             }
@@ -843,17 +979,10 @@ public sealed class FromPt2
             var tag = _tags.FirstOrDefault(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             sb.Append("            <variable name=\"").Append(Esc(name)).Append("\">\n");
             sb.Append("              ").Append(TypeBlock(tag?.Type is { Length: > 0 } tt ? tt : "BOOL")).Append('\n');
-            if (!string.IsNullOrWhiteSpace(tag?.Desc))
-                sb.Append("              <documentation><![CDATA[").Append(CData(tag!.Desc)).Append("]]></documentation>\n");
-            if (!string.IsNullOrWhiteSpace(tag?.Address))
-                sb.Append("              <address>").Append(Esc(tag!.Address)).Append("</address>\n");
-            if (tag != null)
-            {
-                sb.Append("              <ts:TAGNAME>")
-                  .Append("<ts:TAG_DECLARATION SharedRead=\"False\" />")
-                  .Append("<ts:TAG_POINT Address=\"").Append(Esc(tag.Address)).Append("\" />")
-                  .Append("</ts:TAGNAME>\n");
-            }
+            sb.Append("              <initialValue><simpleValue value=\"")
+              .Append(Esc(tag?.InitialValue ?? "")).Append("\" /></initialValue>\n");
+            sb.Append("              <documentation><![CDATA[").Append(CData(tag?.Desc ?? "")).Append("]]></documentation>\n");
+            if (tag != null) EmitTagName(sb, tag);
             sb.Append("            </variable>\n");
         }
         sb.Append("          </globalVars>\n");
@@ -861,6 +990,122 @@ public sealed class FromPt2
         sb.Append("      </configuration>\n");
         sb.Append("    </configurations>\n  </instances>\n");
     }
+
+    /// <summary>
+    /// Emits the whole TriStation &lt;ts:TAGNAME&gt; block for one tag from its
+    /// Current/Tagnames/Tagnames.csv row - the exact inverse of the XML-to-CSV mapping in
+    /// TagGen.SourceMap(). Verified against the official XMLImportExport 5.8.0 export of the
+    /// same container; the earlier stub (TAG_DECLARATION SharedRead + a made-up TAG_POINT)
+    /// dropped the point assignment, scaling, display, location and I/O module parameters.
+    /// </summary>
+    private static void EmitTagName(StringBuilder sb, Pt2Tag t)
+    {
+        // POINT_ASSIGNMENT.PhysicalAddress in the official export equals the CSV Address column
+        // (e.g. I/O point B3001: CSV Address=04.03.01 -> PhysicalAddress="04.03.01"), NOT the CSV
+        // PhysicalAddress column (IBR.0001 is that internal register form). See TagGen.SourceMap.
+        string pa = t.Address.Length > 0 ? t.Address : t.PhysicalAddress;
+
+        sb.Append("              <ts:TAGNAME>\n");
+        sb.Append("                <ts:TAG_DECLARATION Group1=\"").Append(Esc(t.Group1))
+          .Append("\" Group2=\"").Append(Esc(t.Group2))
+          .Append("\" Application=\"").Append(AppOf(t.IsSafety))
+          .Append("\" SharedForRead=\"").Append(YesNo(t.SharedRead))
+          .Append("\" EnableMultipleWrite=\"").Append(YesNo(t.EnableMultipleWrites))
+          .Append("\" />\n");
+        sb.Append("                <ts:POINT_ASSIGNMENT TagClass=\"").Append(ClassOf(t.Class))
+          .Append("\" PointType=\"").Append(PointTypeOf(t.Location))
+          .Append("\" AliasCategory=\"").Append(AliasCategoryOf(t.AliasNumberSelection))
+          .Append("\" AliasType=\"").Append(t.AliasType == "1" ? "UNALIASED" : "ALIASED")
+          .Append("\" AliasNumber=\"").Append(Esc(t.UserAliasLegacy))
+          .Append("\" PhysicalAddress=\"").Append(Esc(pa))
+          .Append("\" AliasNumberExt=\"").Append(Esc(t.UserAliasExtended))
+          .Append("\" BinNumber=\"0\" BinOffset=\"0\" />\n");
+        sb.Append("                <ts:TAG_SCALING MinSpan=\"").Append(Num(t.MinimumValue))
+          .Append("\" MaxSpan=\"").Append(Num(t.MaximumValue))
+          .Append("\" DisplayPrecision=\"").Append(Num(t.Precision))
+          .Append("\" DisableScaling=\"").Append(YesNo(t.DisableScaling))
+          .Append("\" />\n");
+        sb.Append("                <ts:TAG_DISPLAY TrueStateName=\"").Append(Esc(t.StateNameTRUE))
+          .Append("\" FalseStateName=\"").Append(Esc(t.StateNameFALSE))
+          .Append("\" TrueStateColor=\"").Append(ColorOf(t.ColorTRUE))
+          .Append("\" FalseStateColor=\"").Append(ColorOf(t.ColorFALSE))
+          .Append("\" />\n");
+        sb.Append("                <ts:TAG_LOCATION AreaName=\"").Append(Esc(t.Area))
+          .Append("\" Equipment=\"").Append(Esc(t.Equipment))
+          .Append("\" SIFName=\"").Append(Esc(t.SIFName))
+          .Append("\" />\n");
+        sb.Append("                <ts:SOE_BLOCKS_ASSIGNMENT>").Append(Esc(t.SOEFlags.Length > 0 ? t.SOEFlags : "0"))
+          .Append("</ts:SOE_BLOCKS_ASSIGNMENT>\n");
+        sb.Append("                <ts:NO_CONVERSION_FOR_REAL>false</ts:NO_CONVERSION_FOR_REAL>\n");
+        sb.Append("                <ts:IO_MODULE_PARAMS IoModuleType=\"").Append(IoModuleOf(t.IOModuleType))
+          .Append("\" PointOpt=\"NOT_USED\">\n");
+        sb.Append("                  <ts:SDI_PARAMS TriggerState=\"NONE\" MinimumTriggerTime=\"").Append(Num(t.MinimumTriggerTime))
+          .Append("\" SoeDeadTime=\"").Append(Num(t.SOEDeadTime))
+          .Append("\" RParallel=\"0\" RSeries=\"0\" RETP=\"0\" RAdjust=\"").Append(Num(t.R_Adjust))
+          .Append("\" />\n");
+        sb.Append("                  <ts:SDO_PARAMS ShortedThreshold=\"").Append(Num(t.ShortedThreshold))
+          .Append("\" OpenThreshold=\"").Append(Num(t.OpenThreshold))
+          .Append("\" />\n");
+        sb.Append("                  <ts:AI_PARAMS ClampEngValue=\"").Append(LcBool(t.AI_ClampEngineeringVal))
+          .Append("\" FldFaultMon=\"").Append(LcBool(t.AI_FieldFaultMonitor))
+          .Append("\" MinRawValue=\"").Append(Num(t.AI_MinimumRawValue))
+          .Append("\" MaxRawValue=\"").Append(Num(t.AI_MaximumRawValue))
+          .Append("\" MinEngValue=\"").Append(Num(t.AI_MinimumEngValue))
+          .Append("\" MaxEngValue=\"").Append(Num(t.AI_MaximumEngValue))
+          .Append("\" FilterType=\"").Append(FilterOf(t.AI_FilterType))
+          .Append("\" FldFaultLoLimit=\"").Append(F32(t.AI_NamurLowLimit))
+          .Append("\" FldFaultHiLimit=\"").Append(F32(t.AI_NamurHighLimit))
+          .Append("\" />\n");
+        sb.Append("                  <ts:HART_PARAMS Enable=\"").Append(LcBool(t.HART_Enable))
+          .Append("\" DtmVendor=\"\" DtmName=\"\" MonConfigChanges=\"").Append(LcBool(t.HART_MonitorConfigChanges))
+          .Append("\" MonDeviceHealth=\"").Append(LcBool(t.HART_MonitorDeviceHealth))
+          .Append("\" LockConfig=\"").Append(LcBool(t.HART_LockConfiguration))
+          .Append("\" />\n");
+        sb.Append("                  <ts:PI_PARAMS PIPointType=\"").Append(Num(t.PI_PointType))
+          .Append("\" GearTeeth=\"").Append(Num(t.PI_PointGearTeeth))
+          .Append("\" GearRatio=\"").Append(Num(t.PI_PointGearRatio))
+          .Append("\" />\n");
+        sb.Append("                </ts:IO_MODULE_PARAMS>\n");
+        sb.Append("              </ts:TAGNAME>\n");
+    }
+
+    // ---- tag field reversal (inverse of TagGen.SourceMap) ----
+
+    private static string YesNo(string csv) =>
+        csv.Equals("True", StringComparison.OrdinalIgnoreCase) ? "Yes" : "No";
+
+    private static string LcBool(string csv) =>
+        csv.Equals("True", StringComparison.OrdinalIgnoreCase) ? "true" : "false";
+
+    // The reference dialect cannot tell "Safety" from "Control" (both import as IsSafety=True),
+    // so a True flag round-trips as "Safety", the only value a genuine export was seen to use.
+    private static string AppOf(string isSafety) =>
+        isSafety.Equals("True", StringComparison.OrdinalIgnoreCase) ? "Safety" : "Control";
+
+    private static string PointTypeOf(string location) =>
+        location.Trim() switch { "2" => "INPUT", "3" => "OUTPUT", _ => "MEMORY" };
+
+    private static string AliasCategoryOf(string sel) => sel.Trim() == "0" ? "NO_ALIAS" : "DEFAULT_ALIAS";
+
+    private static string ColorOf(string csv) =>
+        csv.Trim() switch { "255" => "RED", "65280" => "GREEN", "16711680" => "BLUE", _ => csv };
+
+    private static string ClassOf(string csv) => csv.Trim() == "3" ? "USER_DEFINED" : csv;
+
+    private static string IoModuleOf(string csv) => csv.Length == 0 || csv.Trim() == "0" ? "NA" : csv;
+
+    private static string FilterOf(string csv) => csv.Length == 0 || csv.Trim() == "0" ? "NONE" : csv;
+
+    /// <summary>Shortest round-trippable form of a numeric CSV column ("4.000000" -> "4").</summary>
+    private static string Num(string csv) =>
+        double.TryParse(csv, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
+            ? d.ToString("R", CultureInfo.InvariantCulture) : csv;
+
+    /// <summary>TriStation keeps the NAMUR field-fault limits in single precision and prints the
+    /// widened double ("3.600000" -> "3.5999999046325684"), so reproduce that exactly.</summary>
+    private static string F32(string csv) =>
+        double.TryParse(csv, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
+            ? ((double)(float)d).ToString("R", CultureInfo.InvariantCulture) : csv;
 
     private string? TagType(string name) => _tagType.TryGetValue(name, out var t) ? t : null;
 
@@ -936,7 +1181,62 @@ public sealed class FromPt2
 
     // ---------------------------------------------------------------- model
 
-    private sealed class Pt2Tag { public string Name = ""; public string Type = ""; public string Desc = ""; public string Address = ""; }
+    /// <summary>One Current/Tagnames/Tagnames.csv row. Carries every column the TriStation
+    /// export turns back into &lt;ts:TAGNAME&gt; children, not just name/type/desc/address.</summary>
+    private sealed class Pt2Tag
+    {
+        public string Name = "";
+        public string Type = "";
+        public string Desc = "";
+        public string Address = "";
+        public string PhysicalAddress = "";
+        public string Group1 = "";
+        public string Group2 = "";
+        public string InitialValue = "";
+        public string IsSafety = "";
+        public string SharedRead = "";
+        public string EnableMultipleWrites = "";
+        public string AliasNumberSelection = "";
+        public string UserAliasLegacy = "";
+        public string UserAliasExtended = "";
+        public string AliasType = "";
+        public string Location = "";
+        public string MinimumValue = "";
+        public string MaximumValue = "";
+        public string Precision = "";
+        public string DisableScaling = "";
+        public string StateNameTRUE = "";
+        public string ColorTRUE = "";
+        public string StateNameFALSE = "";
+        public string ColorFALSE = "";
+        public string Area = "";
+        public string Equipment = "";
+        public string SIFName = "";
+        public string IOModuleType = "";
+        public string MinimumTriggerTime = "";
+        public string SOEDeadTime = "";
+        public string R_Adjust = "";
+        public string ShortedThreshold = "";
+        public string OpenThreshold = "";
+        public string AI_FilterType = "";
+        public string AI_ClampEngineeringVal = "";
+        public string AI_FieldFaultMonitor = "";
+        public string AI_NamurHighLimit = "";
+        public string AI_NamurLowLimit = "";
+        public string AI_MinimumRawValue = "";
+        public string AI_MaximumRawValue = "";
+        public string AI_MinimumEngValue = "";
+        public string AI_MaximumEngValue = "";
+        public string HART_Enable = "";
+        public string HART_MonitorDeviceHealth = "";
+        public string HART_MonitorConfigChanges = "";
+        public string HART_LockConfiguration = "";
+        public string Class = "";
+        public string SOEFlags = "";
+        public string PI_PointType = "";
+        public string PI_PointGearTeeth = "";
+        public string PI_PointGearRatio = "";
+    }
 
     private sealed class Pt2Var
     {
@@ -955,6 +1255,13 @@ public sealed class FromPt2
         public string? ReturnType;
         public string? St;
         public string Title = "";
+        public string DrawingNumber = "";
+        public string DrawingTitle = "";
+        public string DrawingSize = "";
+        public string SheetTemplate = "";
+        public string Revision = "";
+        public int HZoneCount;
+        public int VZoneCount;
         public List<Pt2Var> Vars = new();
         public List<Pt2Sheet> Sheets = new();
         public List<string> ReferencedGlobals = new();
@@ -972,12 +1279,15 @@ public sealed class FromPt2
     {
         public int OldId;
         public int X, Y, W = 16, H = 6;
+        /// <summary>Raw export units as stored in the container (lossless, incl. odd values).</summary>
+        public int RawX, RawY, RawW = 160, RawH = 60;
     }
 
     private sealed class Pt2BlockElem : Pt2Elem
     {
         public string TypeName = "";
         public string Instance = "";
+        public bool IsFunction;
         public List<Pt2Pin> Inputs = new();
         public List<string> Outputs = new();
     }
@@ -987,11 +1297,22 @@ public sealed class FromPt2
     private sealed class Pt2VarElem : Pt2Elem
     {
         public string Name = "";
+        public string VarType = "";
+        public string Annotation = "";
+        public bool Annotate;
         public int InWire = -1;
         public int OutWire = -1;
     }
 
-    private sealed class Pt2CommentElem : Pt2Elem { public string Text = ""; }
+    private sealed class Pt2CommentElem : Pt2Elem
+    {
+        public string Text = "";
+        public string Border = "Single";
+        public string Align = "Left";
+        public int TextSize = 10;
+        public bool BehindLogic;
+        public bool ExpandMacros;
+    }
 
     private sealed class Pt2Wire
     {
@@ -1000,5 +1321,7 @@ public sealed class FromPt2
         public string SrcPin = "";
         public int SinkId = -1;
         public string SinkPin = "";
+        /// <summary>Manhattan path exactly as stored (raw export units, source → target).</summary>
+        public List<(int X, int Y)> Positions = new();
     }
 }

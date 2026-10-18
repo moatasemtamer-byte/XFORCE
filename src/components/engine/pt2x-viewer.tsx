@@ -3,258 +3,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { NxButton, NxPanel, NxPanelBody, NxPanelTitle, NxStat, nxInputClass } from "@/components/nx/primitives";
-
-// ---------------------------------------------------------------------------
-// The JSON model pt2conv tojson emits for a TriStation .pt2/.pt2x container.
-// ---------------------------------------------------------------------------
-
-interface InspectVar {
-  name: string;
-  dataType: string;
-  init: string;
-  desc: string;
-  section: string;
-  isInstance: boolean;
-}
-
-interface InspectPin {
-  name: string;
-  wire: number;
-}
-
-interface InspectElemBase {
-  id: number;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-interface InspectBlockElem extends InspectElemBase {
-  kind: "block";
-  typeName: string;
-  instance: string;
-  inputs: InspectPin[];
-  outputs: string[];
-}
-
-interface InspectVarElem extends InspectElemBase {
-  kind: "var";
-  name: string;
-  inWire: number;
-  outWire: number;
-}
-
-interface InspectCommentElem extends InspectElemBase {
-  kind: "comment";
-  text: string;
-}
-
-interface InspectUnknownElem extends InspectElemBase {
-  kind: "unknown";
-}
-
-type InspectElem = InspectBlockElem | InspectVarElem | InspectCommentElem | InspectUnknownElem;
-
-interface InspectWire {
-  id: number;
-  srcId: number;
-  srcPin: string;
-  sinkId: number;
-  sinkPin: string;
-}
-
-interface InspectSheet {
-  number: number;
-  title: string;
-  elems: InspectElem[];
-  wires: InspectWire[];
-}
-
-interface InspectPou {
-  name: string;
-  pouType: string;
-  returnType: string | null;
-  title: string;
-  vars: InspectVar[];
-  referencedGlobals: string[];
-  st: string | null;
-  sheets: InspectSheet[];
-}
-
-interface InspectTag {
-  name: string;
-  type: string;
-  desc: string;
-  address: string;
-}
-
-interface InspectProject {
-  projectName: string;
-  pouCount: number;
-  tagCount: number;
-  pous: InspectPou[];
-  tags: InspectTag[];
-}
-
-const POU_LABEL: Record<string, string> = {
-  functionBlock: "Function block",
-  function: "Function",
-  program: "Program",
-};
-
-// ---------------------------------------------------------------------------
-// FBD sheet canvas: export units × scale, blocks as boxes, wires as SVG elbows.
-// ---------------------------------------------------------------------------
-
-const SCALE = 11;
-
-function pinY(elem: InspectElem, index: number, count: number): number {
-  const slot = (index + 1) / (count + 1);
-  return elem.y + elem.h * slot;
-}
-
-function elemById(elems: InspectElem[]): Map<number, InspectElem> {
-  const map = new Map<number, InspectElem>();
-  for (const elem of elems) map.set(elem.id, elem);
-  return map;
-}
-
-function wirePoints(wire: InspectWire, byId: Map<number, InspectElem>): { sx: number; sy: number; tx: number; ty: number } | null {
-  const src = byId.get(wire.srcId);
-  const sink = byId.get(wire.sinkId);
-  if (!src || !sink) return null;
-
-  let sy: number;
-  if (src.kind === "block") {
-    const index = Math.max(0, src.outputs.indexOf(wire.srcPin));
-    sy = pinY(src, index, Math.max(1, src.outputs.length));
-  } else {
-    sy = src.y + src.h / 2;
-  }
-
-  let ty: number;
-  if (sink.kind === "block") {
-    const index = Math.max(0, sink.inputs.findIndex((p) => p.name === wire.sinkPin));
-    ty = pinY(sink, index, Math.max(1, sink.inputs.length));
-  } else {
-    ty = sink.y + sink.h / 2;
-  }
-
-  return { sx: src.x + src.w, sy, tx: sink.x, ty };
-}
-
-function FbdSheet({ sheet }: { sheet: InspectSheet }) {
-  const bounds = useMemo(() => {
-    let maxX = 40;
-    let maxY = 20;
-    for (const elem of sheet.elems) {
-      maxX = Math.max(maxX, elem.x + elem.w);
-      maxY = Math.max(maxY, elem.y + elem.h);
-    }
-    return { width: (maxX + 6) * SCALE, height: (maxY + 6) * SCALE };
-  }, [sheet]);
-
-  const byId = useMemo(() => elemById(sheet.elems), [sheet]);
-
-  return (
-    <div className="overflow-auto border border-nx-line bg-nx-white">
-      <div className="relative" style={{ width: bounds.width, height: bounds.height }}>
-        <svg
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0"
-          width={bounds.width}
-          height={bounds.height}
-        >
-          {sheet.wires.map((wire) => {
-            const pts = wirePoints(wire, byId);
-            if (!pts) return null;
-            const sx = pts.sx * SCALE + 3;
-            const sy = pts.sy * SCALE + 3;
-            const tx = pts.tx * SCALE - 3;
-            const ty = pts.ty * SCALE + 3;
-            const mid = (sx + tx) / 2;
-            return (
-              <polyline
-                key={wire.id}
-                points={`${sx},${sy} ${mid},${sy} ${mid},${ty} ${tx},${ty}`}
-                fill="none"
-                stroke="#1f2937"
-                strokeWidth={1.5}
-              />
-            );
-          })}
-        </svg>
-
-        {sheet.elems.map((elem) => {
-          const style = {
-            left: elem.x * SCALE,
-            top: elem.y * SCALE,
-            width: Math.max(elem.w * SCALE, 40),
-            minHeight: Math.max(elem.h * SCALE, 20),
-          };
-
-          if (elem.kind === "comment") {
-            return (
-              <div
-                key={elem.id}
-                style={style}
-                className="absolute whitespace-pre-wrap border border-dashed border-nx-line-strong bg-nx-green-50 px-1.5 py-0.5 text-[10px] leading-snug text-nx-hint"
-              >
-                {elem.text}
-              </div>
-            );
-          }
-
-          if (elem.kind === "var") {
-            return (
-              <div
-                key={elem.id}
-                style={style}
-                className="absolute grid place-items-center border border-nx-ink bg-nx-white px-1 text-[10px] font-semibold text-nx-ink"
-                title={elem.name}
-              >
-                <span className="truncate">{elem.name}</span>
-              </div>
-            );
-          }
-
-          if (elem.kind === "block") {
-            return (
-              <div
-                key={elem.id}
-                style={style}
-                className="absolute flex flex-col border-2 border-nx-ink bg-nx-white"
-                title={`${elem.typeName}${elem.instance ? ` (${elem.instance})` : ""}`}
-              >
-                <div className="truncate border-b border-nx-line bg-nx-green-100 px-1.5 py-0.5 text-[10px] font-bold text-nx-ink">
-                  {elem.typeName}
-                </div>
-                {elem.instance ? (
-                  <div className="truncate px-1.5 py-0.5 text-[9px] text-nx-hint">{elem.instance}</div>
-                ) : null}
-                <div className="flex justify-between gap-1 px-1.5 pb-0.5 text-[8px] text-nx-hint">
-                  <span className="truncate">{elem.inputs.map((p) => p.name).join(" ")}</span>
-                  <span className="truncate">{elem.outputs.join(" ")}</span>
-                </div>
-              </div>
-            );
-          }
-
-          return <div key={elem.id} style={style} className="absolute border border-nx-line bg-nx-white" />;
-        })}
-      </div>
-    </div>
-  );
-}
+import { FbdSheet, type InspectProject, type InspectPou } from "@/components/engine/fbd-sheet";
 
 // ---------------------------------------------------------------------------
 // POU detail: interface table, ST source, FBD sheets.
 // ---------------------------------------------------------------------------
 
+const POU_LABEL: Record<string, string> = {
+  function: "Function",
+  program: "Program",
+  functionBlock: "Function block",
+};
+
 const SECTION_ORDER = ["input", "output", "inOut", "local"];
 
-function PouDetail({ pou }: { pou: InspectPou }) {
+function PouDetail({ pou, projectName }: { pou: InspectPou; projectName: string }) {
   const [sheetIndex, setSheetIndex] = useState(0);
   const sheet = pou.sheets[Math.min(sheetIndex, Math.max(0, pou.sheets.length - 1))];
 
@@ -308,28 +71,24 @@ function PouDetail({ pou }: { pou: InspectPou }) {
 
       {pou.referencedGlobals.length > 0 ? (
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">
-            Referenced globals ({pou.referencedGlobals.length})
-          </p>
-          <p className="mt-1 font-mono text-[11px] text-nx-body">{pou.referencedGlobals.join(", ")}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">Referenced globals</p>
+          <p className="mt-1 text-xs text-nx-hint">{pou.referencedGlobals.join(", ")}</p>
         </div>
       ) : null}
 
       {pou.st ? (
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">Structured Text</p>
-          <pre className="mt-1 max-h-96 overflow-auto border border-nx-line bg-nx-white px-3 py-2 font-mono text-[11px] leading-relaxed text-nx-body">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">Structured text</p>
+          <pre className="mt-1 max-h-[70vh] overflow-auto border border-nx-line bg-nx-white p-3 text-[11px] leading-relaxed text-nx-body">
             {pou.st}
           </pre>
         </div>
       ) : null}
 
       {pou.sheets.length > 0 ? (
-        <div>
+        <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">
-              FBD sheets ({pou.sheets.length})
-            </p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">FBD sheets</p>
             {pou.sheets.length > 1 ? (
               <div className="flex flex-wrap gap-1">
                 {pou.sheets.map((s, i) => (
@@ -350,12 +109,15 @@ function PouDetail({ pou }: { pou: InspectPou }) {
               </div>
             ) : null}
           </div>
-          <div className="mt-2">
-            <FbdSheet key={`${pou.name}-${sheet.number}`} sheet={sheet} />
-          </div>
-          <p className="mt-1 text-[10px] text-nx-hint">
-            {sheet.elems.length} elements · {sheet.wires.length} wires
-          </p>
+          <FbdSheet
+            key={`${pou.name}-${sheet.number}`}
+            sheet={sheet}
+            drawing={pou.drawing}
+            pouName={pou.name}
+            pouTitle={pou.title}
+            projectName={projectName}
+            sheetCount={pou.sheets.length}
+          />
         </div>
       ) : null}
     </div>
@@ -431,30 +193,17 @@ export function PtxViewer() {
     [project, pouName],
   );
 
-  const filteredTags = useMemo(() => {
-    if (!project) return [];
-    const needle = tagFilter.trim().toLowerCase();
-    if (!needle) return project.tags;
-    return project.tags.filter(
-      (t) =>
-        t.name.toLowerCase().includes(needle) ||
-        t.type.toLowerCase().includes(needle) ||
-        t.address.toLowerCase().includes(needle) ||
-        t.desc.toLowerCase().includes(needle),
-    );
-  }, [project, tagFilter]);
-
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold tracking-tight text-nx-ink">Project viewer</h1>
-        <p className="mt-1 text-sm text-nx-hint">
-          Open a TriStation project (.pt2/.pt2x) and inspect its POUs, interface variables, FBD logic and tag
-          table in the browser — no Triconex desktop app needed.
+        <p className="text-xs font-semibold uppercase tracking-wide text-nx-hint">Engine · PT2X viewer</p>
+        <h1 className="mt-1 text-2xl font-bold text-nx-ink">TriStation project viewer</h1>
+        <p className="mt-1 max-w-2xl text-sm text-nx-hint">
+          Drop a <span className="font-mono">.pt2</span> or <span className="font-mono">.pt2x</span> container to browse its
+          programs, function blocks, interface variables and FBD sheets.
         </p>
       </div>
 
-      {/* Dropzone / file picker */}
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -467,12 +216,12 @@ export function PtxViewer() {
           const file = e.dataTransfer.files[0];
           if (file) void inspect(file);
         }}
-        className={`border-2 border-dashed p-6 text-center transition-colors ${
-          dragging ? "border-nx-neon bg-nx-green-50" : "border-nx-line-strong bg-nx-white"
+        className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed px-6 py-10 text-center transition-colors ${
+          dragging ? "border-nx-neon bg-nx-green-50" : "border-nx-line bg-nx-white"
         }`}
       >
-        <p className="text-sm font-semibold text-nx-ink">Drop a .pt2 or .pt2x file here</p>
-        <p className="mt-1 text-xs text-nx-hint">The container is decompiled by the engine and rendered below.</p>
+        <p className="text-sm font-semibold text-nx-ink">Drop a .pt2x here</p>
+        <p className="text-xs text-nx-hint">or pick a file from disk</p>
         <input
           ref={inputRef}
           type="file"
@@ -490,7 +239,7 @@ export function PtxViewer() {
       </div>
 
       {busy ? (
-        <div className="border border-nx-line bg-nx-green-50 px-5 py-4 text-xs text-nx-ink">
+        <div className="border border-nx-line bg-nx-green-50 px-4 py-3 text-xs text-nx-ink">
           Decompiling the project container…
         </div>
       ) : null}
@@ -517,9 +266,7 @@ export function PtxViewer() {
                 type="button"
                 onClick={() => setTab(key)}
                 className={`-mb-px border-b-2 pb-2 text-xs font-semibold uppercase tracking-wide transition-colors ${
-                  tab === key
-                    ? "border-nx-neon text-nx-ink"
-                    : "border-transparent text-nx-hint hover:text-nx-ink"
+                  tab === key ? "border-nx-neon text-nx-ink" : "border-transparent text-nx-hint hover:text-nx-ink"
                 }`}
               >
                 {key === "pous" ? `Programs (${project.pous.length})` : `Tags (${project.tags.length})`}
@@ -541,9 +288,10 @@ export function PtxViewer() {
                         }`}
                       >
                         <span className="block truncate text-xs font-semibold text-nx-ink">{p.name}</span>
-                        <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-nx-hint">
+                        <span className="block truncate text-[10px] text-nx-hint">
                           {POU_LABEL[p.pouType] ?? p.pouType}
-                          {p.st ? " · ST" : p.sheets.length > 0 ? ` · FBD ×${p.sheets.length}` : ""}
+                          {p.sheets.length > 0 ? ` · ${p.sheets.length} sheet${p.sheets.length === 1 ? "" : "s"}` : ""}
+                          {p.st ? " · ST" : ""}
                         </span>
                       </button>
                     </li>
@@ -551,53 +299,60 @@ export function PtxViewer() {
                 </ul>
               </nav>
 
-              <NxPanel>
-                <NxPanelBody>
-                  {pou ? <PouDetail key={pou.name} pou={pou} /> : <p className="text-xs text-nx-hint">No POUs.</p>}
-                </NxPanelBody>
-              </NxPanel>
+              <div className="min-w-0">
+                {pou ? <PouDetail pou={pou} projectName={project.projectName} /> : null}
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
               <input
-                type="search"
+                type="text"
                 value={tagFilter}
                 onChange={(e) => setTagFilter(e.target.value)}
-                placeholder="Filter by name, type, address or description…"
-                className={`${nxInputClass} max-w-md`}
+                placeholder="Filter tags…"
+                className={`${nxInputClass} max-w-xs`}
               />
               <div className="overflow-x-auto border border-nx-line bg-nx-white">
                 <table className="w-full border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-nx-line text-left text-[10px] uppercase tracking-wide text-nx-hint">
-                      <th className="px-3 py-2 font-semibold">Tagname</th>
-                      <th className="px-3 py-2 font-semibold">DataType</th>
-                      <th className="px-3 py-2 font-semibold">Address</th>
-                      <th className="px-3 py-2 font-semibold">Description</th>
+                      <th className="px-3 py-1.5 font-semibold">Name</th>
+                      <th className="px-3 py-1.5 font-semibold">Type</th>
+                      <th className="px-3 py-1.5 font-semibold">Address</th>
+                      <th className="px-3 py-1.5 font-semibold">Description</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTags.map((t, i) => (
-                      <tr key={`${t.name}-${i}`} className="border-b border-nx-line/50">
-                        <td className="px-3 py-1.5 font-mono text-[11px] text-nx-ink">{t.name}</td>
-                        <td className="px-3 py-1.5 text-nx-body">{t.type}</td>
-                        <td className="px-3 py-1.5 font-mono text-[11px] text-nx-body">{t.address || "—"}</td>
-                        <td className="px-3 py-1.5 text-nx-hint">{t.desc || ""}</td>
-                      </tr>
-                    ))}
-                    {filteredTags.length === 0 ? (
+                    {tagFilter.trim() ? (
+                      project.tags
+                        .filter((t) => {
+                          const q = tagFilter.trim().toLowerCase();
+                          return (
+                            t.name.toLowerCase().includes(q) ||
+                            t.type.toLowerCase().includes(q) ||
+                            t.desc.toLowerCase().includes(q) ||
+                            t.address.toLowerCase().includes(q)
+                          );
+                        })
+                        .slice(0, 500)
+                        .map((t) => (
+                          <tr key={t.name} className="border-b border-nx-line/50">
+                            <td className="px-3 py-1.5 font-mono text-[11px] text-nx-ink">{t.name}</td>
+                            <td className="px-3 py-1.5 text-nx-body">{t.type}</td>
+                            <td className="px-3 py-1.5 font-mono text-[11px] text-nx-body">{t.address}</td>
+                            <td className="px-3 py-1.5 text-nx-hint">{t.desc}</td>
+                          </tr>
+                        ))
+                    ) : (
                       <tr>
                         <td colSpan={4} className="px-3 py-4 text-center text-xs text-nx-hint">
-                          No tags match.
+                          {project.tags.length} tags. Type to filter.
                         </td>
                       </tr>
-                    ) : null}
+                    )}
                   </tbody>
                 </table>
               </div>
-              <p className="text-[10px] text-nx-hint">
-                Showing {filteredTags.length} of {project.tags.length} tags.
-              </p>
             </div>
           )}
         </>
@@ -605,7 +360,10 @@ export function PtxViewer() {
 
       {!project && !busy && !error ? (
         <NxPanel>
-          <NxPanelTitle title="Nothing open yet" description="Drop a TriStation project above, or convert a file to PT2X and choose Open in viewer." />
+          <NxPanelTitle
+            title="Nothing open yet"
+            description="Drop a TriStation project above, or convert a file to PT2X and choose Open in viewer."
+          />
           <NxPanelBody>
             <NxButton type="button" variant="quiet" className="text-xs" onClick={() => router.push("/engine/convert")}>
               Go to Convert
