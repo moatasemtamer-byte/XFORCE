@@ -15,6 +15,11 @@ var maxUploadBytes = ReadLong("MSW_MAX_UPLOAD_BYTES", 512L * 1024 * 1024);
 var authToken = Environment.GetEnvironmentVariable("XFORCEMSW_ENGINE_TOKEN")
     ?? Environment.GetEnvironmentVariable("MSW_ENGINE_TOKEN");
 
+// A hosted engine streams its results back and keeps nothing, which leaves the dashboard's
+// evidence panels empty. When MSW_OUTPUT_DIR is set, every successful conversion rewrites
+// the reports there so /api/status and /api/evidence have something honest to read.
+var evidenceDir = Environment.GetEnvironmentVariable("MSW_OUTPUT_DIR");
+
 // Evidence-backed status. Every value is computed from files on disk; nothing is hard-coded.
 var statusEngine = new StatusEngine();
 var statusJson = new JsonSerializerOptions
@@ -130,6 +135,10 @@ app.MapPost("/convert", async (HttpRequest request) =>
             });
         }
 
+        PersistEvidence(evidenceDir,
+            ("ladder_report.txt", ladderReport),
+            ("simatic_report.txt", importReport));
+
         return Results.Json(
             new
             {
@@ -199,6 +208,11 @@ app.MapPost("/convert", async (HttpRequest request) =>
             });
         }
 
+        PersistEvidence(evidenceDir,
+            ("pt2x_build_report.txt", built.Report),
+            ("ladder_report.txt", ladderReport),
+            ("simatic_report.txt", importReport));
+
         return Results.Json(
             new
             {
@@ -253,6 +267,11 @@ app.MapPost("/convert", async (HttpRequest request) =>
             contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(ladderReport)),
         });
     }
+
+    PersistEvidence(evidenceDir,
+        ("report.json", result.ReportJson),
+        ("conversion_report.txt", result.Report),
+        ("ladder_report.txt", ladderReport));
 
     return Results.Json(
         new
@@ -317,6 +336,9 @@ app.MapPost("/convert/project", async (HttpRequest request) =>
         },
     };
     AddReportArtifact(artifacts, result);
+    PersistEvidence(evidenceDir,
+        ("report.json", result.ReportJson),
+        ("conversion_report.txt", result.Report));
 
     return Results.Json(
         new
@@ -627,6 +649,28 @@ static void AddReportArtifact(List<object> artifacts, ConversionResult result)
         kind = "report",
         contentBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(report)),
     });
+}
+
+// Keeps the last run's reports in MSW_OUTPUT_DIR so /api/status and /api/evidence have
+// something to read on a host the caller cannot share a work directory with. Best effort
+// by design: evidence is a convenience, and must never fail a conversion that succeeded.
+static void PersistEvidence(string? output, params (string Name, string? Text)[] items)
+{
+    if (string.IsNullOrWhiteSpace(output)) return;
+
+    try
+    {
+        Directory.CreateDirectory(output);
+        foreach (var (name, text) in items)
+        {
+            if (string.IsNullOrWhiteSpace(text)) continue;
+            File.WriteAllText(Path.Combine(output, name), text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+    }
+    catch (Exception)
+    {
+        // Reporting is optional; a read-only or missing directory must not break the response.
+    }
 }
 
 static Dictionary<string, object?> BuildSummary(ConversionResult result) => new()
