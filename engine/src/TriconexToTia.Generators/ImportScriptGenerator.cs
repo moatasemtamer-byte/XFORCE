@@ -157,7 +157,7 @@ try {
         $project = $tia.Projects.Open($projectFile)
     } else {
         Write-Host ""Creating project '$ProjectName' at '$fullProjectPath'..."" -ForegroundColor Cyan
-        $projectDir = [System.IO.DirectoryInfo]::new($fullProjectPath)
+        $projectDir = [System.IO.DirectoryInfo]::new($ProjectPath)
         $project = $tia.Projects.Create($projectDir, $ProjectName)
     }
 

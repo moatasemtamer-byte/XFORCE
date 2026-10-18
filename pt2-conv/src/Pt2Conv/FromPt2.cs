@@ -128,6 +128,10 @@ public sealed class FromPt2
         for (int i = 2; i < lines.Length; i++)
         {
             if (string.IsNullOrWhiteSpace(lines[i])) continue;
+            // The Tagnames.csv is XML-ish: it opens with "<Tags ...>" and closes with
+            // "</Tags>". Every real tag row is a quoted record, so skip any other line
+            // (notably the "</Tags>" footer) instead of reading it as a tag name.
+            if (!lines[i].StartsWith("\"")) continue;
             var f = CsvFields(lines[i]);
             if (f.Length <= iName) continue;
             string name = f[iName];
@@ -612,6 +616,12 @@ public sealed class FromPt2
                         {
                             sb.Append("><connectionPointIn><relPosition x=\"").Append(blk.X).Append("\" y=\"").Append(blk.Y).Append("\" />");
                             AppendConnection(sb, newId[w.SrcId], w.SrcPin, pos[w.SrcId], (blk.X, blk.Y));
+                            sb.Append("</connectionPointIn></variable>");
+                        }
+                        else if (w == null && pin.Wire >= 0 && newId.ContainsKey(pin.Wire))
+                        {
+                            sb.Append("><connectionPointIn><relPosition x=\"").Append(blk.X).Append("\" y=\"").Append(blk.Y).Append("\" />");
+                            AppendConnection(sb, newId[pin.Wire], "", pos[pin.Wire], (blk.X, blk.Y));
                             sb.Append("</connectionPointIn></variable>");
                         }
                         else sb.Append(" />");

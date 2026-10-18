@@ -30,7 +30,7 @@ $tia=$null;$proj=$null;$sum=[ordered]@{Status='UNKNOWN';Imported=[ordered]@{UDTs
 try{
   $full=Join-Path $ProjectPath $ProjectName; if(-not(Test-Path $ProjectPath)){ New-Item -ItemType Directory -Path $ProjectPath -Force|Out-Null }
   Write-Log "Starting TIA..."; $tia=New-Object Siemens.Engineering.TiaPortal([Siemens.Engineering.TiaPortalMode]::WithoutUserInterface); Write-Log "TIA started"
-  $pdi=[System.IO.DirectoryInfo]::new($full); $proj=$tia.Projects.Create($pdi,$ProjectName); Write-Log "Project created"
+  $pdi=[System.IO.DirectoryInfo]::new($ProjectPath); $proj=$tia.Projects.Create($pdi,$ProjectName); Write-Log "Project created"
   $plc=$null; if(-not [string]::IsNullOrWhiteSpace($CpuOrderNumber)){ $ord=$CpuOrderNumber; if($ord -notlike 'OrderNumber:*'){$ord="OrderNumber:$ord"}; $dev=$proj.Devices.CreateWithItem($ord,'PLC_1','PLC_1'); $plc=Get-PlcSoftware $dev }
   if($null -eq $plc){ $proj.Save(); $sum.Status='NO_PLC_SOFTWARE'; $sum|ConvertTo-Json -Depth 5|Out-File $SummaryFile -Encoding UTF8; return }
   # UDTs
