@@ -68,5 +68,17 @@ next-env.d.ts
 # pt2conv embeds the compressed base container; the 9 MB expanded copy is a leftover
 /pt2-conv/src/Pt2Conv/Resources/base.pt2x/
 
+# local scratch: corpora, reference material, downloaded archives
+/corpus/
+/pt2-study/
+/24122024/
+/goldens/
+/artifacts/
+/work/
+/status/
+/*.zip
+/.pytest_cache/
+/.dev_loop/
+
 # keep the template example, never the real env file
 !.env.example

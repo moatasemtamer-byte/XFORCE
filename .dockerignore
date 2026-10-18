@@ -1,6 +1,8 @@
 .git
+.railway
 **/bin/
 **/obj/
+**/node_modules/
 node_modules/
 .next/
 out/
@@ -9,7 +11,18 @@ backup3/
 backup3.zip
 corpus/
 pt2-conv/work/
+pt2-conv/src/Pt2Conv/Resources/base.pt2x/
+tools/bl-core/src/BlankData/
 artifacts/
+goldens/
+24122024/
+pt2-study/
+work/
+status/
+*.zip
+.pytest_cache/
+.dev_loop/
 data/
 .env
 .env.*
+tsconfig.tsbuildinfo

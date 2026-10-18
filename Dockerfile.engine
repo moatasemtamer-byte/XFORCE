@@ -9,7 +9,7 @@
 # /convert/project (a real .ap16, via Siemens Openness) is refused on Linux by design; the
 # SimaticML package from /convert is the importable artifact this image produces for TIA.
 
-FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:7.0-jammy AS build
 WORKDIR /src
 
 COPY engine/ engine/
@@ -26,7 +26,10 @@ RUN dotnet publish pt2-conv/src/Pt2Conv/Pt2Conv.csproj \
 RUN dotnet publish tools/BlLadderCli.Portable/BlLadderCli.Portable.csproj \
         -c Release -r linux-x64 --self-contained false -o /out/bl
 
-FROM mcr.microsoft.com/dotnet/aspnet:7.0 AS runtime
+# Ubuntu 22.04 on both stages: it is the newest base that still packages libgdiplus (Debian
+# dropped it in bookworm), its mirrors are current, and building and running on the same
+# libc avoids a glibc mismatch.
+FROM mcr.microsoft.com/dotnet/aspnet:7.0-jammy AS runtime
 
 # EPPlus 4 (used by the BL reader) can reach into System.Drawing on some code paths, so keep
 # GDI+ available instead of discovering that at runtime.
