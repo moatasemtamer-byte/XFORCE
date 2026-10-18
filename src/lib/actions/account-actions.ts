@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { audit, getCurrentUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { hashPassword, passwordIssues, verifyPassword } from "@/lib/password";
+import { hashPassword, isPasswordlessAccount, passwordIssues, verifyPassword } from "@/lib/password";
 import { PLANS, PLAN_ORDER } from "@/lib/licensing";
 import { clean, isEmail } from "@/lib/validate";
 import { newId, nowIso } from "@/lib/util";
@@ -72,7 +72,10 @@ export async function changePasswordAction(formData: FormData): Promise<void> {
   const current = String(formData.get("currentPassword") ?? "");
   const next = String(formData.get("newPassword") ?? "");
 
-  if (!verifyPassword(current, user.password_hash)) {
+  // A license-first account has no password, so there is nothing to confirm.
+  // Setting one here is how it graduates to a normal account. For an account
+  // that already has a password the current one is still required.
+  if (!isPasswordlessAccount(user.password_hash) && !verifyPassword(current, user.password_hash)) {
     redirect("/dashboard/settings?error=wrong_password");
   }
 

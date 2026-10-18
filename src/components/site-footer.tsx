@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { engineStatus } from "@/lib/converter";
 import { NAV_ITEMS, PRODUCT_LINKS } from "@/lib/nav";
 import { Logo } from "./logo";
 
-export function SiteFooter() {
+export async function SiteFooter() {
+  const engine = await engineStatus();
+
   return (
     <footer className="border-t border-ink-800 bg-ink-900/40">
       <div className="mx-auto max-w-6xl px-5 py-12">
@@ -10,8 +13,8 @@ export function SiteFooter() {
           <div className="md:col-span-2">
             <Logo />
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-mist-500">
-              XforceMsw builds the conversion pipeline that turns PLC ladder diagrams into MSW
-              deliverables, and ships it as a licensed, auditable web service.
+              XforceMsw builds the conversion pipeline that turns PLC ladder logic into Triconex
+              TRISTATION-MS Workstation notation, and ships it as a licensed, auditable web service.
             </p>
           </div>
 
@@ -46,8 +49,10 @@ export function SiteFooter() {
         <div className="mt-6 flex flex-col items-start justify-between gap-3 text-xs text-mist-500 sm:flex-row">
           <p>© {new Date().getFullYear()} XforceMsw. All rights reserved.</p>
           <p className="flex items-center gap-2">
-            <span className="h-1.5 w-1.5 rounded-full bg-good-500" />
-            All systems operational
+            <span
+              className={engine.ready ? "h-1.5 w-1.5 rounded-full bg-good-500" : "h-1.5 w-1.5 rounded-full bg-amberline-400"}
+            />
+            {engine.ready ? `Conversion engine online` : "Conversion engine not connected"}
           </p>
         </div>
       </div>

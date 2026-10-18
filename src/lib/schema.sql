@@ -23,7 +23,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
 CREATE TABLE IF NOT EXISTS licenses (
   id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Nullable on purpose. An admin can mint a key before anyone has an account;
+  -- the owner is filled in when the first seat is claimed. See applyMigrations.
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   key TEXT NOT NULL UNIQUE,
   plan TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
@@ -46,6 +48,24 @@ CREATE TABLE IF NOT EXISTS license_events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_license_events_license ON license_events(license_id);
+
+-- One row per seat holder. Seats are claimed automatically and first-come
+-- first-served: the first N distinct holders to use a key take the seats, and
+-- re-using the key from a holder that already has one does not consume another.
+-- holder is an account email for web conversions and a device label for clients
+-- using POST /api/licenses/validate, so the same table covers both.
+CREATE TABLE IF NOT EXISTS license_seats (
+  id TEXT PRIMARY KEY,
+  license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE,
+  holder TEXT NOT NULL,
+  holder_kind TEXT NOT NULL DEFAULT 'account',
+  account_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  claimed_at TEXT NOT NULL,
+  last_used_at TEXT,
+  UNIQUE (license_id, holder)
+);
+CREATE INDEX IF NOT EXISTS idx_license_seats_license ON license_seats(license_id);
+CREATE INDEX IF NOT EXISTS idx_license_seats_account ON license_seats(account_id);
 
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,

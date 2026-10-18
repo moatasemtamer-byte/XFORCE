@@ -33,6 +33,18 @@ export function storageDir(): string {
   return requireInProduction("STORAGE_DIR", "./data/storage");
 }
 
+// Directory the engine writes evidence into (report.json, roundtrip.json) and
+// the directory holding tests.trx. Forwarded to the engine as query params so a
+// hosted frontend can point at an engine on another machine. Optional: the
+// engine also reads the same variables from its own environment.
+export function engineOutputDir(): string | undefined {
+  return read("MSW_OUTPUT_DIR");
+}
+
+export function engineStatusDir(): string | undefined {
+  return read("MSW_STATUS_DIR");
+}
+
 export function appUrl(): string {
   return read("APP_URL") ?? (isProd ? "" : "http://localhost:3000");
 }
@@ -59,4 +71,19 @@ export function engineUrl(): string | null {
 
 export function engineToken(): string | null {
   return read("MSW_ENGINE_TOKEN") ?? null;
+}
+
+/**
+ * Shared secret that unlocks the mock payment provider.
+ *
+ * Checkout is refused unless this is set, and the request must echo the same
+ * value. A mock provider that issues real licenses is a "pay nothing, get a
+ * license" hole, so it stays off unless somebody deliberately turns it on.
+ */
+export function mockBillingToken(): string | null {
+  return read("MOCK_BILLING_TOKEN") ?? null;
+}
+
+export function mockBillingEnabled(): boolean {
+  return mockBillingToken() !== null;
 }

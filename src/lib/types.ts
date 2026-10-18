@@ -27,7 +27,8 @@ export interface PublicUser {
 
 export interface License {
   id: string;
-  user_id: string;
+  /** null until someone claims a seat: an unassigned key belongs to nobody yet. */
+  user_id: string | null;
   key: string;
   plan: PlanId;
   status: LicenseStatus;

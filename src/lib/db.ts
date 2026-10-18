@@ -17,6 +17,63 @@ function loadSchema(): string {
   return fs.readFileSync(file, "utf8");
 }
 
+/**
+ * Repairs databases created before `licenses.user_id` became nullable.
+ *
+ * SQLite cannot drop a NOT NULL constraint in place, so the table is rebuilt.
+ * Runs on every cold start but is a no-op once the column is already nullable,
+ * which `PRAGMA table_info` tells us without touching any rows.
+ */
+function applyMigrations(db: Sqlite): void {
+  const columns = db.prepare("PRAGMA table_info(licenses)").all() as { name: string; notnull: number }[];
+  const userId = columns.find((c) => c.name === "user_id");
+  if (!userId || userId.notnull !== 1) return;
+
+  // The pragma is a no-op inside a transaction, so it has to be turned off
+  // first. Child rows in license_events/license_seats are deliberately left
+  // alone: they keep pointing at `licenses`, which the rename below recreates.
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE licenses_migrated (
+          id TEXT PRIMARY KEY,
+          user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+          key TEXT NOT NULL UNIQUE,
+          plan TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          seats INTEGER NOT NULL DEFAULT 1,
+          activations INTEGER NOT NULL DEFAULT 0,
+          activation_limit INTEGER NOT NULL DEFAULT 1,
+          notes TEXT,
+          created_at TEXT NOT NULL,
+          expires_at TEXT,
+          last_used_at TEXT
+        );
+        INSERT INTO licenses_migrated
+          SELECT id, user_id, key, plan, status, seats, activations,
+                 activation_limit, notes, created_at, expires_at, last_used_at
+          FROM licenses;
+        DROP TABLE licenses;
+        ALTER TABLE licenses_migrated RENAME TO licenses;
+      `);
+    })();
+
+    // Indexes went with the old table.
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(user_id);
+      CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(key);
+    `);
+
+    const broken = db.pragma("foreign_key_check") as { table: string }[];
+    if (broken.length > 0) {
+      throw new Error(`licenses migration left broken references: ${broken.map((b) => b.table).join(", ")}`);
+    }
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
 export function getDb(): Sqlite {
   if (instance) return instance;
 
@@ -30,6 +87,7 @@ export function getDb(): Sqlite {
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
   db.exec(loadSchema());
+  applyMigrations(db);
   instance = db;
   return db;
 }

@@ -12,7 +12,7 @@ const STAGES = [
     tag: "Stage 1",
     title: "Upload",
     body: "The browser posts a multipart request straight to the API route. The server checks the extension, enforces your plan's maximum file size, and confirms you have conversions left this month. Nothing is written to job history until all three pass.",
-    detail: ["5 MB on Free, up to 512 MB on Enterprise", "15 accepted extensions", "5 attempts per IP per 15 minutes on registration"],
+    detail: ["5 MB on Free, up to 32 MB on Enterprise", "PDF or program listing", "5 attempts per IP per 15 minutes on registration"],
   },
   {
     tag: "Stage 2",
@@ -23,7 +23,7 @@ const STAGES = [
   {
     tag: "Stage 3",
     title: "Convert",
-    body: "The platform calls your engine at MSW_ENGINE_URL/convert with the file, the job id, the options and the license key. The response is a list of artifacts plus any warnings the engine raised.",
+    body: "The platform calls the engine at MSW_ENGINE_URL/convert with the file, the declared original filename, the job id and the license key. The response is the artifact list plus any warnings the engine raised.",
     detail: ["120 second default timeout", "Non-2xx responses become readable errors", "Engine version recorded on the job"],
   },
   {
@@ -82,8 +82,8 @@ export default function HowItWorksPage() {
                 The platform sends <code className="font-mono text-signal-300">multipart/form-data</code> to{" "}
                 <code className="font-mono text-signal-300">POST {`{MSW_ENGINE_URL}`}/convert</code> with the
                 fields <code className="font-mono text-mist-200">file</code>,{" "}
-                <code className="font-mono text-mist-200">jobId</code>,{" "}
-                <code className="font-mono text-mist-200">options</code> and{" "}
+                <code className="font-mono text-mist-200">filename</code>,{" "}
+                <code className="font-mono text-mist-200">jobId</code> and{" "}
                 <code className="font-mono text-mist-200">licenseKey</code>. An optional{" "}
                 <code className="font-mono text-mist-200">Authorization: Bearer</code> header carries
                 <code className="font-mono text-mist-200"> MSW_ENGINE_TOKEN</code>.

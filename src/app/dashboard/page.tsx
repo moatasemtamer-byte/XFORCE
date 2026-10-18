@@ -89,8 +89,8 @@ export default async function DashboardPage() {
               {[
                 ["Max file size", formatBytes(context.plan.maxUploadBytes)],
                 ["Result retention", `${context.plan.retentionDays} days`],
-                ["Batch uploads", context.plan.batchUploads ? "Included" : "Not available"],
-                ["API access", context.plan.apiAccess ? "Included" : "Not available"],
+                ["Outputs per job", "6 artifacts"],
+                ["Source formats", "PDF or listing"],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between">
                   <dt className="text-mist-500">{label}</dt>

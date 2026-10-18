@@ -2,10 +2,12 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { PageTitle } from "@/components/dashboard/page-title";
+import { AdminLicenseManager } from "@/components/dashboard/admin-licenses";
 import { Badge, Panel, PanelTitle, Stat } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/util";
 import { databasePath, storageDir } from "@/lib/env";
 import { engineStatus } from "@/lib/converter";
+import { listLicensesForAdmin, listSeats, type LicenseSeat } from "@/lib/licensing";
 
 type UserRow = {
   id: string;
@@ -16,17 +18,6 @@ type UserRow = {
   plan: string;
   created_at: string;
   jobs: number;
-};
-
-type LicenseRow = {
-  id: string;
-  key: string;
-  plan: string;
-  status: string;
-  activations: number;
-  activation_limit: number;
-  expires_at: string | null;
-  email: string;
 };
 
 type MessageRow = {
@@ -45,10 +36,18 @@ type AuditRow = {
   created_at: string;
 };
 
-export default async function AdminPage() {
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   if (user.role !== "admin") redirect("/dashboard");
+
+  const params = await searchParams;
+  const filterRaw = typeof params.licenses === "string" ? params.licenses : "all";
+  const filter = ["all", "active", "suspended", "revoked", "expired"].includes(filterRaw) ? filterRaw : "all";
 
   const db = getDb();
   const engine = await engineStatus();
@@ -61,14 +60,17 @@ export default async function AdminPage() {
     )
     .all() as UserRow[];
 
-  const licenses = db
-    .prepare(
-      `SELECT licenses.id, licenses.key, licenses.plan, licenses.status, licenses.activations,
-              licenses.activation_limit, licenses.expires_at, users.email
-       FROM licenses JOIN users ON users.id = licenses.user_id
-       ORDER BY licenses.created_at DESC LIMIT 100`,
-    )
-    .all() as LicenseRow[];
+  const allLicenses = listLicensesForAdmin(200);
+  const counts = { all: allLicenses.length } as Record<string, number>;
+  for (const license of allLicenses) {
+    const status = license.expired ? "expired" : license.status;
+    counts[status] = (counts[status] ?? 0) + 1;
+  }
+  const licenses = allLicenses.filter(
+    (license) => filter === "all" || (license.expired ? "expired" : license.status) === filter,
+  );
+  const seatsByLicense: Record<string, LicenseSeat[]> = {};
+  for (const license of licenses) seatsByLicense[license.id] = listSeats(license.id);
 
   const messages = db
     .prepare("SELECT * FROM messages ORDER BY created_at DESC LIMIT 25")
@@ -87,6 +89,22 @@ export default async function AdminPage() {
     )
     .get() as { users: number; licenses: number; jobs: number; bytes: number };
 
+  const notice = params.issued
+    ? "License issued. Copy the key from the list below and send it to the user."
+    : params.updated
+      ? "License terms updated."
+      : params.released
+        ? "Seat released and now available again."
+        : null;
+  const error = params.error
+    ? {
+        no_such_user: "No account with that email. Ask the user to register first.",
+        forbidden: "You do not have permission to do that.",
+        not_found: "That license no longer exists.",
+        invalid_request: "Check the values and try again.",
+      }[params.error as string] ?? "Something went wrong."
+    : null;
+
   return (
     <div className="space-y-8">
       <PageTitle
@@ -103,8 +121,11 @@ export default async function AdminPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <Panel>
-          <PanelTitle title="Users" description="Most recent 100 accounts." />
+        <Panel className="xl:col-span-2">
+          <PanelTitle
+            title="Users"
+            description="Most recent 100 accounts."
+          />
           <div className="overflow-x-auto">
             <table className="w-full min-w-[520px] text-left text-xs">
               <thead>
@@ -138,47 +159,16 @@ export default async function AdminPage() {
           </div>
         </Panel>
 
-        <Panel>
-          <PanelTitle title="Licenses" description="Most recent 100 keys across all accounts." />
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-left text-xs">
-              <thead>
-                <tr className="border-b border-ink-700 text-[11px] uppercase tracking-[0.12em] text-mist-500">
-                  <th className="px-5 py-3 font-medium">Key</th>
-                  <th className="px-5 py-3 font-medium">Owner</th>
-                  <th className="px-5 py-3 font-medium">Seats</th>
-                  <th className="px-5 py-3 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {licenses.map((row) => (
-                  <tr key={row.id} className="border-b border-ink-800 last:border-0">
-                    <td className="px-5 py-2.5 font-mono text-[11px] text-mist-300">
-                      {row.key.slice(0, 20)}…
-                    </td>
-                    <td className="px-5 py-2.5 text-mist-400">{row.email}</td>
-                    <td className="px-5 py-2.5 tabular-nums text-mist-400">
-                      {row.activations}/{row.activation_limit}
-                    </td>
-                    <td className="px-5 py-2.5">
-                      <Badge
-                        tone={
-                          row.status === "active"
-                            ? "good"
-                            : row.status === "revoked"
-                              ? "bad"
-                              : "warn"
-                        }
-                      >
-                        {row.status}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
+        <div className="xl:col-span-2">
+          <AdminLicenseManager
+            licenses={licenses}
+            seatsByLicense={seatsByLicense}
+            filter={filter}
+            counts={counts}
+            notice={notice}
+            error={error}
+          />
+        </div>
 
         <Panel>
           <PanelTitle title="Inbound messages" description="Contact form and plan change requests." />

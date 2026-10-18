@@ -2,10 +2,15 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { getDashboardContext } from "@/lib/dashboard";
 import { getDb } from "@/lib/db";
-import { issueLicenseAction, updateLicenseStatusAction } from "@/lib/actions/license-actions";
+import {
+  issueLicenseAction,
+  releaseSeatAction,
+  updateLicenseStatusAction,
+  updateLicenseTermsAction,
+} from "@/lib/actions/license-actions";
 import { PageTitle } from "@/components/dashboard/page-title";
 import { Badge, Button, EmptyState, Field, Panel, PanelTitle, inputClass } from "@/components/ui";
-import { PLANS, PLAN_ORDER } from "@/lib/licensing";
+import { PLANS, PLAN_ORDER, listSeats } from "@/lib/licensing";
 import { formatDate, formatDateTime, isExpired } from "@/lib/util";
 import type { LicenseStatus } from "@/lib/types";
 
@@ -94,13 +99,15 @@ export default async function LicensesPage({ searchParams }: PageProps<"/dashboa
             <ul className="divide-y divide-ink-800">
               {context.licenses.map((license) => {
                 const expired = isExpired(license.expires_at);
+                const seats = listSeats(license.id);
+                const free = Math.max(0, license.activation_limit - seats.length);
                 return (
                   <li key={license.id} className="px-5 py-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="font-mono text-xs text-mist-200">{license.key}</p>
                         <p className="mt-1 text-[11px] text-mist-500">
-                          {license.plan} · {license.activations}/{license.activation_limit} seats · issued{" "}
+                          {license.plan} · {seats.length}/{license.activation_limit} seats · issued{" "}
                           {formatDate(license.created_at)}
                           {license.expires_at ? ` · expires ${formatDate(license.expires_at)}` : " · no expiry"}
                         </p>
@@ -112,6 +119,77 @@ export default async function LicensesPage({ searchParams }: PageProps<"/dashboa
                         {expired ? "expired" : license.status}
                       </Badge>
                     </div>
+
+                    <details className="group mt-3">
+                      <summary className="cursor-pointer list-none text-[11px] text-signal-300 hover:text-signal-200">
+                        Who is using this license ({seats.length} seat{seats.length === 1 ? "" : "s"}, {free} free)
+                      </summary>
+                      <div className="mt-2.5 rounded-lg border border-ink-700 bg-ink-900/50 p-3">
+                        {seats.length === 0 ? (
+                          <p className="text-[11px] text-mist-500">
+                            No seats claimed yet. Anyone with this key claims one automatically on their first
+                            conversion, up to the limit.
+                          </p>
+                        ) : (
+                          <ul className="space-y-2">
+                            {seats.map((seat) => (
+                              <li key={seat.id} className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-[11px] text-mist-200">{seat.holder}</p>
+                                  <p className="text-[10px] text-mist-500">
+                                    {seat.holder_kind === "device" ? "device" : "account"} · last used{" "}
+                                    {seat.last_used_at ? formatDateTime(seat.last_used_at) : "never"}
+                                  </p>
+                                </div>
+                                <form action={releaseSeatAction}>
+                                  <input type="hidden" name="returnTo" value="/dashboard/licenses" />
+                                  <input type="hidden" name="id" value={license.id} />
+                                  <input type="hidden" name="holder" value={seat.holder} />
+                                  <Button type="submit" variant="subtle" size="sm">
+                                    Release
+                                  </Button>
+                                </form>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </details>
+
+                    <details className="group mt-2">
+                      <summary className="cursor-pointer list-none text-[11px] text-signal-300 hover:text-signal-200">
+                        Change seats or expiry
+                      </summary>
+                      <form action={updateLicenseTermsAction} className="mt-2.5 space-y-3">
+                        <input type="hidden" name="returnTo" value="/dashboard/licenses" />
+                        <input type="hidden" name="id" value={license.id} />
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Field label="Seats" htmlFor={`seats-${license.id}`}>
+                            <input
+                              id={`seats-${license.id}`}
+                              name="seats"
+                              type="number"
+                              min={1}
+                              max={500}
+                              defaultValue={license.activation_limit}
+                              className={inputClass}
+                            />
+                          </Field>
+                          <Field label="Expires" htmlFor={`expires-${license.id}`} hint="Empty means never.">
+                            <input
+                              id={`expires-${license.id}`}
+                              name="expiresAt"
+                              type="date"
+                              defaultValue={license.expires_at ? license.expires_at.slice(0, 10) : ""}
+                              className={inputClass}
+                            />
+                          </Field>
+                        </div>
+                        <Button type="submit" variant="outline" size="sm">
+                          Save
+                        </Button>
+                      </form>
+                    </details>
 
                     <div className="mt-3 flex flex-wrap gap-2">
                       {license.status === "active" ? (

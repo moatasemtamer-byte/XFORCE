@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 const FAQ = [
   {
     q: "What counts as one conversion?",
-    a: "One uploaded source file that produces one job record. Batch uploads of many files in a single request still count per file, so a 40-file batch costs 40 conversions.",
+    a: "One uploaded source file that produces one job record, with all six artifacts attached. Jobs are uploaded and converted one file at a time.",
   },
   {
     q: "Do I need to pay before trying?",
@@ -21,11 +21,11 @@ const FAQ = [
   },
   {
     q: "What is a license key for?",
-    a: "A key lets you run conversions against a named installation — a PLC workstation, a CI job, or a customer's machine. Keys carry a seat limit, an optional expiry date, and can be revoked instantly.",
+    a: "A key records conversions against a named installation — a PLC workstation, a CI job, or a customer's machine. Keys carry a seat limit, an optional expiry date, and can be revoked instantly.",
   },
   {
-    q: "How does API access work?",
-    a: "Professional and Enterprise accounts get a REST endpoint. Upload a source, poll the job, download the artifacts. Every request is rate limited per account and recorded in job history.",
+    q: "Which files can I upload?",
+    a: "A text-based ladder-logic PDF, or a raw monospace program listing such as a Triconex TRISTATION .LPT printout. CAD, image and database exports are not parsed — see the capabilities page for the full list.",
   },
   {
     q: "What happens to my uploaded files?",
@@ -98,16 +98,16 @@ export default function PricingPage() {
 
                 <div className="mt-6">
                   {id === "enterprise" ? (
-                    <ButtonLink href="/contact" variant="outline" className="w-full">
+                    <ButtonLink href="/contact?source=enterprise" variant="outline" className="w-full">
                       Contact sales
                     </ButtonLink>
                   ) : (
                     <ButtonLink
-                      href="/register"
+                      href={`/checkout?plan=${id}`}
                       variant={featured ? "primary" : "outline"}
                       className="w-full"
                     >
-                      {plan.priceMonthly === 0 ? "Start free" : "Get started"}
+                      {plan.priceMonthly === 0 ? "Start free" : "Get this license"}
                     </ButtonLink>
                   )}
                 </div>
@@ -117,7 +117,8 @@ export default function PricingPage() {
         </div>
 
         <p className="mt-8 text-center text-xs text-mist-500">
-          Prices exclude tax. Annual billing is available on every paid plan.{" "}
+          Prices exclude tax. Annual billing is available on every paid plan. Checkout in this build uses a mock
+          payment provider: no card is collected and the license is generated immediately.{" "}
           <Link href="/contact" className="text-signal-300 underline-offset-4 hover:underline">
             Ask about volume pricing
           </Link>

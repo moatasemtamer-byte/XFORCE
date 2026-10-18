@@ -6,7 +6,7 @@ import { requestPlanChangeAction } from "@/lib/actions/account-actions";
 import { PageTitle } from "@/components/dashboard/page-title";
 import { Badge, Button, Panel, PanelTitle, cx } from "@/components/ui";
 import { PLANS, PLAN_ORDER } from "@/lib/licensing";
-import { formatDate } from "@/lib/util";
+import { formatBytes, formatDate } from "@/lib/util";
 
 export default async function BillingPage({ searchParams }: PageProps<"/dashboard/billing">) {
   const user = await getCurrentUser();
@@ -82,9 +82,7 @@ export default async function BillingPage({ searchParams }: PageProps<"/dashboar
                         {Number.isFinite(plan.monthlyConversions) ? plan.monthlyConversions : "∞"}
                       </td>
                       <td className="px-5 py-3 tabular-nums text-mist-300">
-                        {plan.maxUploadBytes >= 1024 * 1024 * 1024
-                          ? "512 MB"
-                          : `${plan.maxUploadBytes / (1024 * 1024)} MB`}
+                        {formatBytes(plan.maxUploadBytes)}
                       </td>
                       <td className="px-5 py-3 tabular-nums text-mist-300">{plan.seats}</td>
                       <td className="px-5 py-3 tabular-nums text-mist-300">{plan.retentionDays} d</td>

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { getDashboardContext } from "@/lib/dashboard";
 import { createAndRunJob, QuotaError } from "@/lib/jobs";
-import { checkLicenseKey } from "@/lib/licensing";
+import { checkLicenseKey, claimSeat } from "@/lib/licensing";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { DEFAULT_OPTIONS, type ConversionOptions } from "@/lib/converter";
 import { clean } from "@/lib/validate";
@@ -66,8 +66,16 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    if (check.license.user_id !== user.id) {
-      return NextResponse.json({ error: "That license key belongs to another account." }, { status: 403 });
+    // A license is shareable up to its seat allowance: the first N distinct
+    // accounts to use the key each hold a seat, and reuse does not consume more.
+    const seat = claimSeat(check.license.id, user.email, "account", user.id);
+    if (!seat.ok) {
+      return NextResponse.json(
+        {
+          error: `This license has no free seats left (${seat.seatsUsed}/${seat.seatLimit} in use). Ask the license owner or an administrator to raise the seat count.`,
+        },
+        { status: 403 },
+      );
     }
     licenseId = check.license.id;
     licenseKey = check.license.key;
@@ -76,8 +84,11 @@ export async function POST(request: Request) {
       (license) => license.status === "active" && license.activations < license.activation_limit,
     );
     if (firstActive) {
-      licenseId = firstActive.id;
-      licenseKey = firstActive.key;
+      const seat = claimSeat(firstActive.id, user.email, "account", user.id);
+      if (seat.ok) {
+        licenseId = firstActive.id;
+        licenseKey = firstActive.key;
+      }
     }
   }
 

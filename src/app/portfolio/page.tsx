@@ -3,73 +3,87 @@ import { MarketingShell, PageHeader } from "@/components/marketing-shell";
 import { Badge, ButtonLink, Panel, SectionHeading } from "@/components/ui";
 
 export const metadata: Metadata = {
-  title: "Portfolio",
-  description: "Selected ladder diagram to MSW conversion work delivered by XforceMsw.",
+  title: "Engine capabilities",
+  description: "Exactly what the XforceMsw conversion engine reads, what it returns, and where its limits are.",
 };
 
-const PROJECTS = [
+const INPUTS = [
   {
-    client: "Beverage bottling line",
-    sector: "Packaging",
-    scope: "Motor starter and conveyor interlock set",
-    volume: "312 source drawings",
-    turnaround: "4 working days",
-    outcome:
-      "Every rung traced back to its source sheet. Two legacy drawings with mismatched coil references were flagged by the engine before hand-off.",
-    tags: ["Motor starters", "Conveyor interlocks", "Traceability"],
+    kind: "Ladder-logic PDF",
+    accepted: true,
+    detail: "Text-based PDF exports of ladder sheets. Pages are read in order and rungs are reconstructed from the printed logic.",
   },
   {
-    client: "Municipal pump station",
-    sector: "Water infrastructure",
-    scope: "Panel IO list and rung report generation",
-    volume: "18 drawings",
-    turnaround: "6 minutes",
-    outcome:
-      "IO list and rung report produced per panel, then reviewed by the site's own controls engineer against the as-built documentation.",
-    tags: ["IO lists", "Rung reports", "Field validation"],
+    kind: "Raw program listing",
+    accepted: true,
+    detail: "Monospace printouts such as a Triconex TRISTATION .LPT file, saved with a .txt, .lst, .log or .csv extension.",
   },
   {
-    client: "Automotive tier-1 supplier",
-    sector: "Automotive",
-    scope: "Repeatable monthly service for a cell",
-    volume: "640 drawings / quarter",
-    turnaround: "Continuous",
-    outcome:
-      "Moved from a two-week manual pass to a queued batch with per-job audit records, tracked on the Professional plan with five license keys.",
-    tags: ["Batch processing", "Recurring service", "Licensing"],
+    kind: "Scanned PDF",
+    accepted: false,
+    detail: "Image-only pages contain no text layer to read. Run OCR on the scan first, then upload the result.",
   },
   {
-    client: "Machine builder (OEM)",
-    sector: "OEM",
-    scope: "Client-facing deliverable bundles per machine",
-    volume: "1,100 bundles",
-    turnaround: "Continuous",
-    outcome:
-      "Each machine ships with its MSW bundle and a signed job record, so the customer's maintenance team receives the same documentation the build team used.",
-    tags: ["Client handover", "Artifact bundles", "Job records"],
+    kind: "CAD, image and database exports",
+    accepted: false,
+    detail: "SCH, LAD, XML, EDB, DWG, DXF, PNG and JPG are not parsed. Export to PDF or a text listing instead.",
   },
 ];
 
-const CAPABILITIES = [
-  { label: "Largest single job", value: "1,240 rungs" },
-  { label: "Fastest turnaround", value: "6 minutes" },
-  { label: "Drawings converted", value: "9,400+" },
-  { label: "Repeat clients", value: "4" },
+const ARTIFACTS = [
+  {
+    name: ".tristation.tsv",
+    detail: "TRISTATION functional listing in Networks # / Logic form. Produced for Triconex sources; rung numbers are preserved so the output can be diffed against the original.",
+    primary: true,
+  },
+  {
+    name: ".report.md",
+    detail: "Markdown summary of detected networks, variables and rungs, together with any warnings raised during parsing.",
+  },
+  {
+    name: ".equations.json",
+    detail: "Machine-readable equation set, useful for diffing two versions of the same program.",
+  },
+  {
+    name: ".rungs.csv",
+    detail: "One row per rung, for review in a spreadsheet or as input to your own checking script.",
+  },
+  {
+    name: ".workbook.xlsx",
+    detail: "Formatted workbook holding the equations and rung data for offline review.",
+  },
+  {
+    name: ".report.html",
+    detail: "Printable single-file report for attaching to a QA pack or an email.",
+  },
+];
+
+const LIMITS = [
+  { label: "Maximum upload", value: "32 MB" },
+  { label: "Maximum pages", value: "400" },
+  { label: "Engine timeout", value: "100 s" },
+  { label: "Artifacts per job", value: "6" },
+];
+
+const BEHAVIOUR = [
+  "Triconex sources get the full TRISTATION functional listing. Other recognised dialects are still parsed, but return the report and equation outputs only, with a warning explaining why no functional listing was produced.",
+  "The engine reads the logic, it does not interpret it. Every output should be reviewed against the source drawing before it is used on a live machine.",
+  "If the source dialect cannot be identified, the engine says so in the warnings rather than returning a plausible-looking but empty conversion.",
 ];
 
 export default function PortfolioPage() {
   return (
     <MarketingShell>
       <PageHeader
-        eyebrow="Portfolio"
-        title="Work we have actually delivered"
-        description="A few engagements that show the shape of the work: what came in, how long it took, and what the client did with it."
+        eyebrow="Engine capabilities"
+        title="What the engine actually reads and returns"
+        description="No invented case studies here — this is the actual input and output contract of the conversion service."
       />
 
       <section className="border-b border-ink-800">
         <div className="mx-auto max-w-6xl px-5 py-14">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {CAPABILITIES.map((item) => (
+            {LIMITS.map((item) => (
               <Panel key={item.label} className="p-5">
                 <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-mist-500">
                   {item.label}
@@ -81,51 +95,74 @@ export default function PortfolioPage() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-6xl px-5 py-16">
-        <div className="space-y-6">
-          {PROJECTS.map((project) => (
-            <Panel key={project.client} className="p-6 sm:p-8">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-signal-400">
-                    {project.sector}
-                  </p>
-                  <h2 className="mt-2 text-lg font-semibold">{project.client}</h2>
-                  <p className="mt-1 text-sm text-mist-400">{project.scope}</p>
+      <section className="border-b border-ink-800">
+        <div className="mx-auto max-w-6xl px-5 py-16">
+          <SectionHeading
+            title="Accepted sources"
+            description="Two formats are parsed. Everything else is rejected at upload rather than returning an empty result."
+          />
+          <div className="mt-10 space-y-4">
+            {INPUTS.map((item) => (
+              <Panel key={item.kind} className="p-6">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h2 className="text-base font-semibold">{item.kind}</h2>
+                  <Badge tone={item.accepted ? "good" : "warn"}>
+                    {item.accepted ? "Accepted" : "Not accepted"}
+                  </Badge>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {project.tags.map((tag) => (
-                    <Badge key={tag}>{tag}</Badge>
-                  ))}
-                </div>
-              </div>
-
-              <dl className="mt-6 grid gap-4 border-y border-ink-800 py-4 sm:grid-cols-2">
-                <div>
-                  <dt className="text-[11px] uppercase tracking-[0.14em] text-mist-500">Volume</dt>
-                  <dd className="mt-1 text-sm tabular-nums text-mist-200">{project.volume}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] uppercase tracking-[0.14em] text-mist-500">Turnaround</dt>
-                  <dd className="mt-1 text-sm tabular-nums text-mist-200">{project.turnaround}</dd>
-                </div>
-              </dl>
-
-              <p className="mt-4 text-sm leading-relaxed text-mist-400">{project.outcome}</p>
-            </Panel>
-          ))}
+                <p className="mt-3 text-sm leading-relaxed text-mist-400">{item.detail}</p>
+              </Panel>
+            ))}
+          </div>
         </div>
       </section>
 
-      <section className="border-t border-ink-800 bg-ink-900/30">
+      <section className="border-b border-ink-800 bg-ink-900/30">
+        <div className="mx-auto max-w-6xl px-5 py-16">
+          <SectionHeading
+            title="Returned for every job"
+            description="The engine always returns the same set, so there is nothing to configure before you upload."
+          />
+          <div className="mt-10 grid gap-4 sm:grid-cols-2">
+            {ARTIFACTS.map((item) => (
+              <Panel key={item.name} className="p-6">
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="font-mono text-sm text-signal-300">{item.name}</p>
+                  {item.primary ? <Badge tone="info">Primary</Badge> : null}
+                </div>
+                <p className="mt-3 text-sm leading-relaxed text-mist-400">{item.detail}</p>
+              </Panel>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="border-b border-ink-800">
+        <div className="mx-auto max-w-4xl px-5 py-16">
+          <SectionHeading
+            title="What the engine will not do"
+            description="The boundaries matter more than the feature list when you are trusting output on a real machine."
+          />
+          <ul className="mt-8 space-y-4">
+            {BEHAVIOUR.map((line) => (
+              <li key={line} className="flex gap-3 text-sm leading-relaxed text-mist-400">
+                <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-signal-400" />
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="bg-ink-900/30">
         <div className="mx-auto max-w-3xl px-5 py-16">
           <SectionHeading
-            title="Want a reference call?"
-            description="We will put you in touch with a client whose drawings look like yours, once you tell us what you are converting."
+            title="Try it on your own source"
+            description="The free plan gives you five conversions a month, which is enough to check the engine against a drawing you already trust."
           />
           <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <ButtonLink href="/contact" size="lg">
-              Request a reference
+            <ButtonLink href="/register" size="lg">
+              Start free
             </ButtonLink>
             <ButtonLink href="/pricing" variant="outline" size="lg">
               See pricing

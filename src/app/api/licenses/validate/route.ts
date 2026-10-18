@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { activateLicense, checkLicenseKey } from "@/lib/licensing";
+import { claimSeat, checkLicenseKey } from "@/lib/licensing";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { clean } from "@/lib/validate";
 
@@ -42,20 +42,35 @@ export async function POST(request: Request) {
   }
 
   const key = clean(payload.key ?? "", 80);
-  const device = clean(payload.device ?? "", 120) || null;
+  const device = clean(payload.device ?? "", 120) || "unnamed-device";
 
   const check = checkLicenseKey(key);
   if (!check.valid || !check.license) {
     return response({ valid: false, reason: check.reason ?? "invalid" }, 403);
   }
 
-  activateLicense(check.license.id, device);
+  // Claim a seat for this device. Claiming is idempotent per device label, so a
+  // client that re-checks on a timer refreshes its existing seat instead of
+  // consuming a new one on every request.
+  const seat = claimSeat(check.license.id, device, "device", null);
+  if (!seat.ok) {
+    return response(
+      {
+        valid: false,
+        reason: seat.reason ?? "invalid",
+        seatsUsed: seat.seatsUsed,
+        activationLimit: seat.seatLimit,
+      },
+      403,
+    );
+  }
 
   return response({
     valid: true,
     plan: check.license.plan,
-    activations: check.license.activations + 1,
-    activationLimit: check.license.activation_limit,
+    activations: seat.seatsUsed,
+    activationLimit: seat.seatLimit,
     expiresAt: check.license.expires_at,
+    seatStatus: seat.reason,
   });
 }

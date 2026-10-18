@@ -55,7 +55,7 @@ export function ContactForm() {
           id="subject"
           name="subject"
           className={inputClass}
-          placeholder="Ladder to MSW pilot project"
+          placeholder="Logic analysis pilot project"
         />
       </Field>
 

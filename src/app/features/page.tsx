@@ -4,17 +4,18 @@ import { Badge, ButtonLink, Panel, SectionHeading } from "@/components/ui";
 
 export const metadata: Metadata = {
   title: "Features",
-  description: "What the XforceMsw platform does: ladder-aware conversion, licensing, job history, quotas and API access.",
+  description: "What the XforceMsw platform does: ladder-aware conversion to TRISTATION notation, licensing, job history and quotas.",
 };
 
 const GROUPS = [
   {
     title: "Conversion",
     items: [
-      "Source formats: SCH, LAD, XML, EDB, TXT, CSV, PDF, images, DWG and DXF.",
+      "Sources: ladder-logic PDF, or a raw program listing (.txt, .lpt, .lst, .log, .csv).",
       "Rung-aware parsing: contacts, coils, timers, counters and branches are read as logic.",
+      "Triconex sources produce a TRISTATION functional listing (.tristation.tsv).",
       "Rung numbering preserved from source to deliverable for traceability.",
-      "Optional netlist, bill of materials and rung report alongside the main output.",
+      "Every job also returns a report, equation JSON, rung CSV, workbook and HTML report.",
       "Engine warnings surfaced on the job, never swallowed.",
     ],
   },
@@ -46,7 +47,7 @@ export default function FeaturesPage() {
       <PageHeader
         eyebrow="Features"
         title="A conversion service, not a single web form"
-        description="The hard part of shipping a ladder-to-MSW service is everything around the conversion. That is what we built first."
+        description="The hard part of shipping a ladder-to-TRISTATION service is everything around the conversion. That is what we built first."
       />
 
       <section className="mx-auto max-w-6xl px-5 py-16">

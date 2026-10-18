@@ -8,29 +8,50 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 const title = siteName();
 
+/** Official wordmark, served unmodified from /brand. */
+const brandImage = {
+  url: "/brand/xforcemsw-logo.png",
+  width: 1983,
+  height: 793,
+  alt: `${title} — industrial logic, reconstructed`,
+};
+
 export const metadata: Metadata = {
   metadataBase: appUrl() ? new URL(appUrl()) : undefined,
   title: {
-    default: `${title} — Ladder diagram to MSW conversion`,
+    default: `${title} — Industrial logic, reconstructed`,
     template: `%s · ${title}`,
   },
   description:
-    "XforceMsw converts PLC ladder diagrams into MSW deliverables. Upload a drawing, get a validated conversion back, and manage licenses from one dashboard.",
+    "XFORCEMSW is engineering software for industrial control logic. It reads text-based ladder PDFs and ASCII listings, reconstructs their structure, generates Boolean equations, cross-references signals, reports analysis findings, and exports engineering artefacts — deterministically and offline.",
   applicationName: title,
   keywords: [
     "ladder diagram",
     "PLC",
+    "ladder logic parsing",
+    "Boolean equations",
+    "logic cross-reference",
+    "TRISTATION",
+    "Triconex",
     "MSW",
-    "IEC 61131-3",
     "controls engineering",
-    "diagram conversion",
+    "logic documentation",
+    "PLC modernization",
   ],
   openGraph: {
-    title: `${title} — Ladder diagram to MSW conversion`,
+    title: `${title} — Industrial logic, reconstructed`,
     description:
-      "Upload a ladder diagram, get a validated MSW deliverable. Licensing, job history and API access in one place.",
+      "Read industrial control logic from PDFs and listings, reconstruct its structure, cross-reference signals, analyse it, and export engineering artefacts from one source.",
     type: "website",
     siteName: title,
+    images: [brandImage],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${title} — Industrial logic, reconstructed`,
+    description:
+      "Read industrial control logic from PDFs and listings, reconstruct its structure, cross-reference signals, analyse it, and export engineering artefacts from one source.",
+    images: [brandImage.url],
   },
   robots: { index: true, follow: true },
 };

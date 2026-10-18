@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { getDb } from "./db";
-import { hashToken } from "./password";
+import { hashToken, isPasswordlessAccount, passwordlessHash } from "./password";
 import { addDays, newId, nowIso, randomToken } from "./util";
 import { isProduction, adminEmails } from "./env";
 import type { PublicUser, User, UserRole } from "./types";
@@ -84,5 +84,50 @@ export async function getCurrentPublicUser(): Promise<PublicUser | null> {
 export function audit(actorId: string | null, action: string, detail?: unknown): void {
   getDb()
     .prepare("INSERT INTO audit_log (id, actor_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(newId("aud"), actorId, action, detail === undefined ? null : JSON.stringify(detail), nowIso());
+    .run(newId("aud"), actorId, detail === undefined ? null : JSON.stringify(detail), nowIso());
+}
+
+/**
+ * Find or create the account a license key belongs to.
+ *
+ * License-first access means a visitor never fills in a registration form: the
+ * key plus an email address is the whole credential. These accounts are stored
+ * with a non-parsable passwordless marker, so they can never be signed into
+ * through the password form — the key is the only way in. A returning visitor
+ * who already has a password keeps it untouched, and callers must not open a
+ * session for them without that password.
+ */
+export function provisionLicenseAccount(email: string, name?: string | null): User {
+  const db = getDb();
+  const normalized = email.trim().toLowerCase();
+
+  const existing = db.prepare("SELECT * FROM users WHERE email = ?").get(normalized) as User | undefined;
+  if (existing) return existing;
+
+  const id = newId("usr");
+  const label = name?.trim() || normalized.split("@")[0];
+
+  db.prepare(
+    `INSERT INTO users (id, email, name, company, password_hash, role, plan, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, ?, ?, 'free', ?, ?)`,
+  ).run(
+    id,
+    normalized,
+    label,
+    passwordlessHash(),
+    roleForEmail(normalized),
+    nowIso(),
+    nowIso(),
+  );
+
+  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as User;
+}
+
+/**
+ * True when the account was created by the license-first flow and therefore has
+ * no password. Callers must never open a session for an account that *does*
+ * have a password on the strength of a license key alone.
+ */
+export function isPasswordless(user: Pick<User, "password_hash">): boolean {
+  return isPasswordlessAccount(user.password_hash);
 }

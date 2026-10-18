@@ -36,6 +36,22 @@ export function verifyPassword(password: string, stored: string): boolean {
   return timingSafeEqual(derived, expected);
 }
 
+/**
+ * Marker stored instead of a scrypt hash for accounts created by the
+ * license-first flow. It is deliberately not a parsable hash, so
+ * `verifyPassword` can never match it and no password can ever be guessed
+ * into one of these accounts.
+ */
+const PASSWORDLESS = "passwordless";
+
+export function passwordlessHash(): string {
+  return PASSWORDLESS;
+}
+
+export function isPasswordlessAccount(stored: string): boolean {
+  return stored === PASSWORDLESS;
+}
+
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }

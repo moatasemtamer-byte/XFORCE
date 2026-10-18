@@ -4,11 +4,13 @@ import { Logo } from "./logo";
 export function AuthShell({
   title,
   subtitle,
+  notice,
   children,
   footer,
 }: {
   title: string;
   subtitle: string;
+  notice?: React.ReactNode;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -25,6 +27,7 @@ export function AuthShell({
         <div className="panel-raised p-7">
           <h1 className="text-xl font-semibold">{title}</h1>
           <p className="mt-1.5 text-xs text-mist-500">{subtitle}</p>
+          {notice ? <div className="mt-5">{notice}</div> : null}
           <div className="mt-6">{children}</div>
         </div>
 

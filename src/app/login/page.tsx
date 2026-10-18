@@ -10,13 +10,32 @@ export const metadata: Metadata = {
   description: "Sign in to your XforceMsw dashboard to convert ladder diagrams and manage licenses.",
 };
 
-export default async function LoginPage() {
+const NOTICES: Record<string, string> = {
+  sign_in_required:
+    "That email already has a password on this account, so we did not sign you in automatically. Your license is linked to it — enter your password to continue.",
+};
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
   if (await getCurrentPublicUser()) redirect("/dashboard");
+
+  const { error } = await searchParams;
+  const notice = error ? NOTICES[error] : undefined;
 
   return (
     <AuthShell
       title="Sign in"
       subtitle="Access your conversions, licenses and job history."
+      notice={
+        notice ? (
+          <p role="alert" className="rounded-lg border border-signal-500/40 bg-signal-500/10 px-3.5 py-2.5 text-xs text-signal-200">
+            {notice}
+          </p>
+        ) : undefined
+      }
       footer={
         <Link href="/">← Back to xforcemsw.com</Link>
       }
