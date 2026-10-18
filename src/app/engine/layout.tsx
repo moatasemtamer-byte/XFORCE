@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { NxBrand } from "@/components/nx/brand";
 import { NxFooterBand } from "@/components/nx/footer-band";
 import { NxScreenTitle } from "@/components/nx/screen-title";
@@ -18,15 +19,25 @@ export default async function EngineLayout({ children }: { children: React.React
 
       <header className="sticky top-0 z-30 border-b border-nx-line bg-nx-white">
         <div className="flex w-full items-center gap-3 px-6 py-2.5 lg:px-10">
-          <NxBrand />
+          <Link href="/" className="shrink-0" aria-label="Home">
+            <NxBrand />
+          </Link>
           <span aria-hidden="true" className="hidden h-5 w-px bg-nx-line sm:block" />
           <NxScreenTitle />
-          <a
-            href="/dashboard"
-            className="ml-auto text-xs text-nx-hint transition-colors hover:text-nx-ink"
-          >
-            SaaS dashboard
-          </a>
+          <nav className="ml-auto flex items-center gap-4">
+            <Link
+              href="/"
+              className="text-xs text-nx-hint transition-colors hover:text-nx-ink"
+            >
+              Home
+            </Link>
+            <Link
+              href="/dashboard"
+              className="text-xs text-nx-hint transition-colors hover:text-nx-ink"
+            >
+              Dashboard
+            </Link>
+          </nav>
         </div>
       </header>
 
