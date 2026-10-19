@@ -138,6 +138,7 @@ export function PtxViewer() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
+  const [pouFilter, setPouFilter] = useState("");
   const [tab, setTab] = useState<"pous" | "tags">("pous");
 
   const inspect = useCallback(async (file: File) => {
@@ -192,6 +193,17 @@ export function PtxViewer() {
     () => project?.pous.find((p) => p.name === pouName) ?? project?.pous[0] ?? null,
     [project, pouName],
   );
+
+  const filteredPous = useMemo(() => {
+    const list = project?.pous ?? [];
+    const q = pouFilter.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (POU_LABEL[p.pouType] ?? p.pouType).toLowerCase().includes(q),
+    );
+  }, [project, pouFilter]);
 
   return (
     <div className="space-y-6">
@@ -276,28 +288,39 @@ export function PtxViewer() {
 
           {tab === "pous" ? (
             <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
-              <nav aria-label="Programs" className="border border-nx-line bg-nx-white">
-                <ul className="max-h-[70vh] divide-y divide-nx-line overflow-y-auto">
-                  {project.pous.map((p) => (
-                    <li key={p.name}>
-                      <button
-                        type="button"
-                        onClick={() => setPouName(p.name)}
-                        className={`w-full px-3 py-2 text-left transition-colors ${
-                          pou?.name === p.name ? "bg-nx-green-100" : "hover:bg-nx-green-50"
-                        }`}
-                      >
-                        <span className="block truncate text-xs font-semibold text-nx-ink">{p.name}</span>
-                        <span className="block truncate text-[10px] text-nx-hint">
-                          {POU_LABEL[p.pouType] ?? p.pouType}
-                          {p.sheets.length > 0 ? ` · ${p.sheets.length} sheet${p.sheets.length === 1 ? "" : "s"}` : ""}
-                          {p.st ? " · ST" : ""}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
+              <div className="border border-nx-line bg-nx-white">
+                <div className="border-b border-nx-line p-2">
+                  <input
+                    type="text"
+                    value={pouFilter}
+                    onChange={(e) => setPouFilter(e.target.value)}
+                    placeholder="Filter programs…"
+                    className={`${nxInputClass} w-full`}
+                  />
+                </div>
+                <nav aria-label="Programs">
+                  <ul className="max-h-[62vh] divide-y divide-nx-line overflow-y-auto">
+                    {filteredPous.map((p) => (
+                      <li key={p.name}>
+                        <button
+                          type="button"
+                          onClick={() => setPouName(p.name)}
+                          className={`w-full px-3 py-2 text-left transition-colors ${
+                            pou?.name === p.name ? "bg-nx-green-100" : "hover:bg-nx-green-50"
+                          }`}
+                        >
+                          <span className="block truncate text-xs font-semibold text-nx-ink">{p.name}</span>
+                          <span className="block truncate text-[10px] text-nx-hint">
+                            {POU_LABEL[p.pouType] ?? p.pouType}
+                            {p.sheets.length > 0 ? ` · FBD · ${p.sheets.length} sheet${p.sheets.length === 1 ? "" : "s"}` : ""}
+                            {p.st ? " · ST" : ""}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </nav>
+              </div>
 
               <div className="min-w-0">
                 {pou ? <PouDetail pou={pou} projectName={project.projectName} /> : null}

@@ -76,10 +76,10 @@ export type InspectElem = InspectBlockElem | InspectVarElem | InspectCommentElem
 
 export interface InspectWire {
   id: number;
-  srcId: number;
-  srcPin: string;
-  sinkId: number;
-  sinkPin: string;
+  aId: number;
+  aPin: string;
+  bId: number;
+  bPin: string;
   positions: number[][];
 }
 

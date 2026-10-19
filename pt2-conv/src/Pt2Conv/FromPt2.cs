@@ -20,6 +20,7 @@ public sealed class FromPt2
     private readonly Dictionary<string, byte[]> _streams;
     private readonly List<Pt2Tag> _tags;
     private readonly Dictionary<string, string> _tagType = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string>? _projectElems;
 
     private FromPt2(Dictionary<string, byte[]> streams, List<Pt2Tag> tags)
     {
@@ -155,10 +156,10 @@ public sealed class FromPt2
                     wires = s.Wires.Select(w => new
                     {
                         id = w.OldId,
-                        srcId = w.SrcId,
-                        srcPin = w.SrcPin,
-                        sinkId = w.SinkId,
-                        sinkPin = w.SinkPin,
+                        aId = w.AId,
+                        aPin = w.APin,
+                        bId = w.BId,
+                        bPin = w.BPin,
                         positions = w.Positions.Select(p => new[] { p.X, p.Y }).ToArray(),
                     }).ToArray(),
                 }).ToArray(),
@@ -197,7 +198,7 @@ public sealed class FromPt2
                     instance = blk.Instance,
                     isFunction = blk.IsFunction,
                     inputs = blk.Inputs.Select(p => new { name = p.Name, wire = p.Wire }).ToArray(),
-                    outputs = blk.Outputs.ToArray(),
+                    outputs = blk.Outputs.Select(o => o.Name).ToArray(),
                 };
 
             case Pt2VarElem v:
@@ -268,6 +269,11 @@ public sealed class FromPt2
 
     private IEnumerable<string> PouFolders()
     {
+        // Only project-local elements (LibID == 1 in Current/Project.xml) are exported as <pou>.
+        // The official XMLImportExport output contains exactly these; library elements (STDLIB,
+        // TCXLIB, TX1LIB, sheet templates) live in the .EMA libraries and every element folder we
+        // used to emit (AIN, TON, EQ, ...) is not part of the project.
+        var project = ProjectElementNames();
         var folders = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in _streams.Keys)
         {
@@ -278,9 +284,30 @@ public sealed class FromPt2
             string folder = parts[2];
             if (folder.Equals("Configuration", StringComparison.OrdinalIgnoreCase)) continue;
             if (folder.StartsWith("SheetTemplate", StringComparison.OrdinalIgnoreCase)) continue;
+            if (project != null && !project.Contains(folder)) continue;
             folders.Add(folder);
         }
         return folders;
+    }
+
+    /// <summary>Names of project-local elements (LibID="1") from Current/Project.xml, or null
+    /// when the catalog is unavailable (in which case every element folder is treated as a POU).</summary>
+    private HashSet<string>? ProjectElementNames()
+    {
+        if (_projectElems != null) return _projectElems.Count == 0 ? null : _projectElems;
+        _projectElems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!_streams.TryGetValue("Current/Project.xml", out var data)) return null;
+        try
+        {
+            var doc = XDocument.Parse(Encoding.UTF8.GetString(data));
+            foreach (var e in doc.Descendants().Where(e => e.Name.LocalName == "Class" && e.Attribute("ElemName") != null))
+            {
+                if ((string?)e.Attribute("LibID") == "1")
+                    _projectElems.Add((string)e.Attribute("ElemName")!);
+            }
+        }
+        catch { /* ignore - fall back to all folders */ }
+        return _projectElems.Count == 0 ? null : _projectElems;
     }
 
     private string? ProjectName()
@@ -543,9 +570,14 @@ public sealed class FromPt2
             {
                 number++;
                 var sheet = new Pt2Sheet { Number = number, Title = (string?)sheetClass.Attribute("sheetTitle") ?? "" };
+                for (int i = 0; i < 10; i++)
+                {
+                    string val = (string?)sheetClass.Attribute("S" + i) ?? "";
+                    sheet.Macros[i] = val;
+                }
                 var disp = Child(sheetClass, "Collection", "displayables");
                 if (disp != null) ReadSheet(sheet, disp);
-                if (sheet.Elems.Count > 0) block.Sheets.Add(sheet);
+                if (sheet.Elems.Count > 0 || sheet.Dividers.Count > 0) block.Sheets.Add(sheet);
             }
         }
 
@@ -568,16 +600,18 @@ public sealed class FromPt2
             string ct = (string?)c.Attribute("ClassType") ?? "";
             switch (ct)
             {
-                case "CFBDFBlockXml":
-                case "CFBDFunctionXml":
-                {
-                    var b = new Pt2BlockElem
-                    {
-                        OldId = Int(c, "localId"),
-                        TypeName = (string?)c.Attribute("typeName") ?? "",
-                        Instance = (string?)c.Attribute("instanceName") ?? "",
-                        IsFunction = ct == "CFBDFunctionXml",
-                    };
+                 case "CFBDFBlockXml":
+                 case "CFBDFunctionXml":
+                 {
+                     var b = new Pt2BlockElem
+                     {
+                         OldId = Int(c, "localId"),
+                         TypeName = (string?)c.Attribute("typeName") ?? "",
+                         Instance = (string?)c.Attribute("instanceName") ?? "",
+                         IsFunction = ct == "CFBDFunctionXml",
+                         DoubleSpace = string.Equals((string?)c.Attribute("doubleSpace"), "True", StringComparison.OrdinalIgnoreCase),
+                         Collapsed = string.Equals((string?)c.Attribute("snapEventId"), "0", StringComparison.Ordinal),
+                     };
                     Place(b, c);
                     var inputs = Child(c, "Collection", "inputs");
                     if (inputs != null)
@@ -585,12 +619,16 @@ public sealed class FromPt2
                             b.Inputs.Add(new Pt2Pin
                             {
                                 Name = (string?)pin.Attribute("formalParam") ?? "",
-                                Wire = Int(pin, "connectId"),
+                                Wire = AttrInt(pin, "connectId"),
                             });
                     var outputs = Child(c, "Collection", "outputs");
                     if (outputs != null)
                         foreach (var pin in outputs.Elements().Where(e => e.Name.LocalName == "Class"))
-                            b.Outputs.Add((string?)pin.Attribute("formalParam") ?? "");
+                            b.Outputs.Add(new Pt2Pin
+                            {
+                                Name = (string?)pin.Attribute("formalParam") ?? "",
+                                Wire = AttrInt(pin, "connectId"),
+                            });
                     sheet.Elems.Add(b);
                     break;
                 }
@@ -603,6 +641,16 @@ public sealed class FromPt2
                         OldId = Int(c, "localId"),
                         Name = (string?)c.Attribute("varName") ?? "",
                         VarType = (string?)c.Attribute("varType") ?? "",
+                        Kind = ct switch
+                        {
+                            "CFBDInVarXml" => "outVariable",
+                            "CFBDInOutVarXml" => "inOutVariable",
+                            _ => "inVariable",
+                        },
+                        DataType = (string?)c.Attribute("varDataType") ?? "",
+                        IsConstant = (string?)c.Attribute("varDataType") != null
+                            || string.Equals((string?)c.Attribute("varType"), "CONSTANT", StringComparison.OrdinalIgnoreCase),
+                        AnnotateMonitorValue = string.Equals((string?)c.Attribute("annotateMonitorValue"), "True", StringComparison.OrdinalIgnoreCase),
                         Annotation = (string?)c.Attribute("annotation") ?? "",
                         Annotate = string.Equals((string?)c.Attribute("annotate"), "True", StringComparison.OrdinalIgnoreCase),
                         InWire = AttrInt(c, "inConnectId"),
@@ -614,14 +662,18 @@ public sealed class FromPt2
                 }
                 case "CDGMWireXml":
                 {
-                    var w = new Pt2Wire { OldId = Int(c, "localId") };
+                    var w = new Pt2Wire
+                    {
+                        OldId = Int(c, "localId"),
+                        FeedBack = string.Equals((string?)c.Attribute("feedBack"), "True", StringComparison.OrdinalIgnoreCase),
+                    };
                     foreach (var ep in c.Elements().Where(e => e.Name.LocalName == "Class"))
                     {
                         string embed = (string?)ep.Attribute("Embed") ?? "";
-                        int id = Int(ep, "connectId");
+                        int id = AttrInt(ep, "connectId");
                         string pin = (string?)ep.Attribute("effectiveParam") ?? "";
-                        if (embed == "input") { w.SrcId = id; w.SrcPin = pin; }
-                        else if (embed == "output") { w.SinkId = id; w.SinkPin = pin; }
+                        if (embed == "input") { w.AId = id; w.APin = pin; }
+                        else if (embed == "output") { w.BId = id; w.BPin = pin; }
                     }
                     var positions = Child(c, "Collection", "positions");
                     if (positions != null)
@@ -632,18 +684,39 @@ public sealed class FromPt2
                     sheet.Wires.Add(w);
                     break;
                 }
-                case "CDGMCommentXml":
+                case "CDGMnetworkDividerXml":
                 {
-                    var comment = new Pt2CommentElem
+                    var d = new Pt2Divider
                     {
                         OldId = Int(c, "localId"),
-                        Text = c.Descendants().FirstOrDefault(e => e.Name.LocalName == "CData")?.Value.Trim() ?? "",
-                        Border = (string?)c.Attribute("border") ?? "Single",
-                        Align = (string?)c.Attribute("textAlignment") ?? "Left",
-                        TextSize = Int(c, "textSize"),
-                        BehindLogic = string.Equals((string?)c.Attribute("behindLogic"), "True", StringComparison.OrdinalIgnoreCase),
-                        ExpandMacros = string.Equals((string?)c.Attribute("expandMacros"), "True", StringComparison.OrdinalIgnoreCase),
+                        Orientation = string.Equals((string?)c.Attribute("orientation"), "VERTICAL", StringComparison.OrdinalIgnoreCase)
+                            ? "VERTICAL" : "HORIZONTAL",
+                        RawX = Int(c, "posX"),
+                        RawY = Int(c, "posY"),
+                        RawW = Int(c, "width"),
+                        RawH = Int(c, "height"),
                     };
+                    d.X = Pos(d.RawX);
+                    d.Y = Pos(d.RawY);
+                    d.W = Size(d.RawW);
+                    d.H = Size(d.RawH);
+                    sheet.Dividers.Add(d);
+                    break;
+                }
+                 case "CDGMCommentXml":
+                 {
+                     var comment = new Pt2CommentElem
+                     {
+                         OldId = Int(c, "localId"),
+                         Text = c.Descendants().FirstOrDefault(e => e.Name.LocalName == "CData")?.Value ?? "",
+                         Border = (string?)c.Attribute("border") ?? "Single",
+                         Align = (string?)c.Attribute("textAlignment") ?? "Left",
+                         TextSize = Int(c, "textSize"),
+                         BehindLogic = string.Equals((string?)c.Attribute("behindLogic"), "True", StringComparison.OrdinalIgnoreCase),
+                         ExpandMacros = string.Equals((string?)c.Attribute("expandMacros"), "True", StringComparison.OrdinalIgnoreCase),
+                         MacroEditing = string.Equals((string?)c.Attribute("macroEditing"), "False", StringComparison.OrdinalIgnoreCase) ? false
+                             : string.Equals((string?)c.Attribute("macroEditing"), "True", StringComparison.OrdinalIgnoreCase) ? true : false,
+                     };
                     if (comment.TextSize <= 0) comment.TextSize = 10;
                     Place(comment, c);
                     sheet.Elems.Add(comment);
@@ -754,7 +827,7 @@ public sealed class FromPt2
 
     private void EmitPou(StringBuilder sb, Pt2Block b)
     {
-        sb.Append("      <pou name=\"").Append(Esc(b.Name)).Append("\" pouType=\"").Append(b.PouType).Append("\">\n");
+        sb.Append("      <pou name=\"").Append(Esc(b.Name)).Append("\" version=\"1.0\" pouType=\"").Append(b.PouType).Append("\">\n");
 
         if (b.St != null)
         {
@@ -775,10 +848,12 @@ public sealed class FromPt2
     private void EmitInterface(StringBuilder sb, Pt2Block b)
     {
         sb.Append("        <interface>\n");
-        EmitSection(sb, "inputVars", b.Vars.Where(v => v.Section == "input"));
-        EmitSection(sb, "outputVars", b.Vars.Where(v => v.Section == "output"));
-        EmitSection(sb, "inOutVars", b.Vars.Where(v => v.Section == "inOut"));
-        EmitSection(sb, "localVars", b.Vars.Where(v => v.Section == "local"));
+        var vars = b.Vars.ToList();
+        EmitSection(sb, "localVars name=\"Constants\" constant=\"true\"", vars.Where(v => v.Section == "constVars" || v.Section == "constant"));
+        EmitSection(sb, "inputVars", vars.Where(v => v.Section == "input"));
+        EmitSection(sb, "outputVars", vars.Where(v => v.Section == "output"));
+        EmitSection(sb, "inOutVars", vars.Where(v => v.Section == "inOut"));
+        EmitSection(sb, "localVars", vars.Where(v => v.Section == "local" || (v.Section != "input" && v.Section != "output" && v.Section != "inOut" && v.Section != "constVars" && v.Section != "constant")));
 
         if (b.PouType == "function" && b.ReturnType != null)
             sb.Append("          <returnType>").Append(TypeInner(b.ReturnType)).Append("</returnType>\n");
@@ -800,8 +875,18 @@ public sealed class FromPt2
     private static void EmitSection(StringBuilder sb, string tag, IEnumerable<Pt2Var> vars)
     {
         var list = vars.ToList();
-        if (list.Count == 0) { sb.Append("          <").Append(tag).Append(" />\n"); return; }
-        sb.Append("          <").Append(tag).Append(">\n");
+        if (list.Count == 0)
+        {
+            int sp = tagSpec.IndexOf(' ', StringComparison.Ordinal);
+            string tag = sp < 0 ? tagSpec : tagSpec.Substring(0, sp);
+            sb.Append("          <").Append(tag).Append(" />\n");
+            return;
+        }
+        int s2 = tagSpec.IndexOf(' ', StringComparison.Ordinal);
+        if (s2 >= 0)
+            sb.Append("          <").Append(tagSpec).Append(">\n");
+        else
+            sb.Append("          <").Append(tagSpec).Append(">\n");
         foreach (var v in list)
         {
             sb.Append("            <variable name=\"").Append(Esc(v.Name)).Append("\">\n");
@@ -810,155 +895,378 @@ public sealed class FromPt2
                 sb.Append("              <documentation><![CDATA[").Append(CData(v.Desc)).Append("]]></documentation>\n");
             sb.Append("            </variable>\n");
         }
-        sb.Append("          </").Append(tag).Append(">\n");
+        int s3 = tagSpec.IndexOf(' ', StringComparison.Ordinal);
+        string closeTag = s3 < 0 ? tagSpec : tagSpec.Substring(0, s3);
+        sb.Append("          </").Append(closeTag).Append(">\n");
     }
 
     private void EmitFbdBody(StringBuilder sb, Pt2Block b)
     {
         sb.Append("        <body>\n          <FBD>\n");
-        sb.Append("            <ts:SHEETS>\n");
+        sb.Append("            <ts:SHEETS Width=\"").Append(b.HZoneCount * 20 + 2)
+          .Append("\" Height=\"").Append(b.VZoneCount * 25 + 2).Append('"');
+        if (b.SheetTemplate.Length > 0)
+            sb.Append(" Template=\"").Append(Esc(b.SheetTemplate)).Append('"');
+        sb.Append(">\n");
         foreach (var sheet in b.Sheets)
         {
             string title = string.IsNullOrWhiteSpace(sheet.Title)
                 ? (sheet.Number == 1 ? b.Title : "")
                 : sheet.Title;
-            sb.Append("              <ts:SHEET Number=\"").Append(sheet.Number).Append("\">")
-              .Append("<ts:Macros><ts:Macro Name=\"SHEET_TITLE\"><ts:Value>")
-              .Append(Esc(title)).Append("</ts:Value></ts:Macro></ts:Macros>")
-              .Append("</ts:SHEET>\n");
+            sb.Append("              <ts:SHEET Number=\"").Append(sheet.Number).Append("\">");
+            foreach (var d in sheet.Dividers)
+                sb.Append("<ts:NETWORKDIVIDER Type=\"").Append(Esc(d.Orientation))
+                  .Append("\" LocalId=\"").Append(d.OldId)
+                  .Append("\" X=\"0\" Y=\"").Append(d.Y).Append("\" />");
+            for (int i = 0; i < 10; i++)
+            {
+                sb.Append("<ts:Macros Name=\"S").Append(i).Append("\">");
+                if (sheet.Macros[i].Length > 0)
+                    sb.Append("<ts:Value>").Append(Esc(sheet.Macros[i])).Append("</ts:Value>");
+                else
+                    sb.Append("<ts:Value />");
+                sb.Append("</ts:Macros>");
+            }
+            if (title.Length > 0)
+                sb.Append("<ts:Macros Name=\"SHEET_TITLE\"><ts:Value><![CDATA[")
+                  .Append(CData(title)).Append("]]></ts:Value></ts:Macros>");
+            else
+                sb.Append("<ts:Macros Name=\"SHEET_TITLE\"><ts:Value /></ts:Macros>");
+            sb.Append("</ts:SHEET>\n");
         }
         sb.Append("            </ts:SHEETS>\n");
 
-        int nextId = 1;
-        foreach (var sheet in b.Sheets) EmitSheet(sb, sheet, ref nextId);
+        foreach (var sheet in b.Sheets) EmitSheet(sb, sheet);
 
         sb.Append("          </FBD>\n        </body>\n");
     }
 
-    private void EmitSheet(StringBuilder sb, Pt2Sheet sheet, ref int nextId)
+    private void EmitSheet(StringBuilder sb, Pt2Sheet sheet)
     {
-        var newId = new Dictionary<int, int>();
-        var pos = new Dictionary<int, (int X, int Y)>();
+        var ctx = new FbdCtx();
         foreach (var e in sheet.Elems)
         {
-            if (e is Pt2CommentElem) continue;
-            newId[e.OldId] = nextId++;
-            pos[e.OldId] = (e.X, e.Y);
+            if (e is not Pt2CommentElem) ctx.ElemById[e.OldId] = e;
+            if (e is Pt2BlockElem be)
+            {
+                ctx.BlockIds.Add(be.OldId);
+                if (be.Collapsed) ctx.Collapsed.Add(be.OldId);
+            }
         }
-
-        var wireById = new Dictionary<int, Pt2Wire>();
-        foreach (var w in sheet.Wires) wireById[w.OldId] = w;
-
-        var writeWire = new Dictionary<int, Pt2Wire>();
-        foreach (var w in sheet.Wires)
-            if (w.SinkId >= 0) writeWire[w.SinkId] = w;
-        var isSource = new HashSet<int>(sheet.Wires.Where(w => w.SrcId >= 0).Select(w => w.SrcId));
+        foreach (var w in sheet.Wires) ctx.WireById[w.OldId] = w;
 
         foreach (var e in sheet.Elems)
         {
             switch (e)
             {
                 case Pt2CommentElem c:
-                    if (c.Text.Length > 0) EmitComment(sb, c, sheet.Number, nextId++);
+                    EmitComment(sb, c, sheet.Number);
                     break;
 
                 case Pt2BlockElem blk:
-                {
-                    sb.Append("            <block localId=\"").Append(newId[blk.OldId]).Append('"');
-                    sb.Append(" typeName=\"").Append(Esc(blk.TypeName)).Append('"');
-                    if (blk.Instance.Length > 0) sb.Append(" instanceName=\"").Append(Esc(blk.Instance)).Append('"');
-                    sb.Append(" width=\"").Append(blk.W).Append("\" height=\"").Append(blk.H).Append("\">");
-                    AppendPosition(sb, blk.X, blk.Y, sheet.Number);
-
-                    sb.Append("<inputVariables>");
-                    foreach (var pin in blk.Inputs)
-                    {
-                        sb.Append("<variable formalParameter=\"").Append(Esc(pin.Name)).Append('"');
-                        Pt2Wire? w = null;
-                        if (pin.Wire >= 0 && wireById.TryGetValue(pin.Wire, out var byId)) w = byId;
-                        if (w == null && TryPinWire(sheet, blk.OldId, pin.Name, out var byPin)) w = byPin;
-                        if (w != null && w.SrcId >= 0 && newId.ContainsKey(w.SrcId))
-                        {
-                            sb.Append("><connectionPointIn><relPosition x=\"").Append(blk.X).Append("\" y=\"").Append(blk.Y).Append("\" />");
-                            AppendConnection(sb, newId[w.SrcId], w.SrcPin, pos[w.SrcId], (blk.X, blk.Y));
-                            sb.Append("</connectionPointIn></variable>");
-                        }
-                        else if (w == null && pin.Wire >= 0 && newId.ContainsKey(pin.Wire))
-                        {
-                            sb.Append("><connectionPointIn><relPosition x=\"").Append(blk.X).Append("\" y=\"").Append(blk.Y).Append("\" />");
-                            AppendConnection(sb, newId[pin.Wire], "", pos[pin.Wire], (blk.X, blk.Y));
-                            sb.Append("</connectionPointIn></variable>");
-                        }
-                        else sb.Append(" />");
-                    }
-                    sb.Append("</inputVariables>");
-                    sb.Append("<inOutVariables />");
-                    sb.Append("<outputVariables>");
-                    foreach (var op in blk.Outputs)
-                        sb.Append("<variable formalParameter=\"").Append(Esc(op))
-                          .Append("\"><connectionPointOut><relPosition x=\"").Append(blk.X).Append("\" y=\"").Append(blk.Y)
-                          .Append("\" /></connectionPointOut></variable>");
-                    sb.Append("</outputVariables>");
-                    sb.Append("</block>\n");
+                    EmitBlock(sb, blk, sheet, ctx);
                     break;
-                }
 
                 case Pt2VarElem v:
-                {
-                    bool written = v.InWire >= 0 || writeWire.ContainsKey(v.OldId);
-                    bool read = v.OutWire >= 0 || isSource.Contains(v.OldId);
-                    string tag = written && read ? "inOutVariable" : written ? "outVariable" : "inVariable";
-                    sb.Append("            <").Append(tag).Append(" localId=\"").Append(newId[v.OldId]).Append('"');
-                    sb.Append(" width=\"").Append(v.W).Append("\" height=\"").Append(v.H).Append("\">");
-                    AppendPosition(sb, v.X, v.Y, sheet.Number);
-                    sb.Append("<expression>").Append(Esc(v.Name)).Append("</expression>");
-                    if (written && writeWire.TryGetValue(v.OldId, out var sw) && sw.SrcId >= 0 && newId.ContainsKey(sw.SrcId))
-                    {
-                        sb.Append("<connectionPointIn><relPosition x=\"").Append(v.X).Append("\" y=\"").Append(v.Y).Append("\" />");
-                        AppendConnection(sb, newId[sw.SrcId], sw.SrcPin, pos[sw.SrcId], (v.X, v.Y));
-                        sb.Append("</connectionPointIn>");
-                    }
-                    sb.Append("</").Append(tag).Append(">\n");
+                    EmitVar(sb, v, sheet, ctx);
                     break;
-                }
             }
         }
     }
 
-    private static bool TryPinWire(Pt2Sheet sheet, int blockId, string pin, out Pt2Wire wire)
+    private void EmitBlock(StringBuilder sb, Pt2BlockElem blk, Pt2Sheet sheet, FbdCtx ctx)
     {
-        foreach (var w in sheet.Wires)
-            if (w.SinkId == blockId && string.Equals(w.SinkPin, pin, StringComparison.Ordinal))
-            {
-                wire = w;
-                return true;
-            }
-        wire = null!;
-        return false;
+        sb.Append("            <block localId=\"").Append(blk.OldId).Append('"');
+        sb.Append(" width=\"").Append(blk.W).Append("\" height=\"").Append(blk.Collapsed ? 4 : blk.H).Append('"');
+        sb.Append(" typeName=\"").Append(Esc(blk.TypeName)).Append('"');
+        if (blk.Instance.Length > 0) sb.Append(" instanceName=\"").Append(Esc(blk.Instance)).Append('"');
+        sb.Append('>');
+        AppendPosition(sb, blk.X, blk.Y, sheet.Number);
+
+        if (blk.Collapsed)
+        {
+            sb.Append("<inputVariables /><inOutVariables /><outputVariables />");
+            if (blk.DoubleSpace) sb.Append("<ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>");
+            sb.Append("</block>\n");
+            return;
+        }
+
+        sb.Append("<inputVariables>");
+        for (int i = 0; i < blk.Inputs.Count; i++)
+        {
+            var pin = blk.Inputs[i];
+            sb.Append("<variable formalParameter=\"").Append(Esc(pin.Name)).Append("\">");
+            sb.Append("<connectionPointIn><relPosition x=\"-1\" y=\"").Append(4 + 4 * i).Append("\" />");
+            EmitResolved(sb, ctx, blk.OldId, pin.Name, pin.Wire, (blk.X - 1, blk.Y + 4 + 4 * i));
+            sb.Append("</connectionPointIn></variable>");
+        }
+        sb.Append("</inputVariables>");
+        sb.Append("<inOutVariables />");
+        sb.Append("<outputVariables>");
+        for (int i = 0; i < blk.Outputs.Count; i++)
+        {
+            sb.Append("<variable formalParameter=\"").Append(Esc(blk.Outputs[i].Name)).Append("\">");
+            sb.Append("<connectionPointOut><relPosition x=\"").Append(blk.W + 1)
+              .Append("\" y=\"").Append(4 + 4 * i).Append("\" /></connectionPointOut></variable>");
+        }
+        sb.Append("</outputVariables>");
+        if (blk.DoubleSpace) sb.Append("<ts:DOUBLE_SPACE_TERMINAL>true</ts:DOUBLE_SPACE_TERMINAL>");
+        sb.Append("</block>\n");
     }
 
-    private static void EmitComment(StringBuilder sb, Pt2CommentElem c, int sheet, int newId)
+    private void EmitVar(StringBuilder sb, Pt2VarElem v, Pt2Sheet sheet, FbdCtx ctx)
     {
-        sb.Append("            <comment localId=\"").Append(newId).Append("\" width=\"").Append(c.W)
-          .Append("\" height=\"").Append(c.H).Append("\">");
+        string tag = v.Kind.Length > 0 ? v.Kind : "inVariable";
+        sb.Append("            <").Append(tag).Append(" localId=\"").Append(v.OldId).Append('"');
+        sb.Append(" width=\"").Append(v.W).Append("\" height=\"").Append(v.H).Append('"');
+        sb.Append('>');
+        sb.Append("<ts:FBDITEM_EXT>");
+        if (v.IsConstant)
+            sb.Append("<ts:DATATYPE>").Append(Esc(v.DataType)).Append("</ts:DATATYPE>");
+        else
+            sb.Append("<ts:ANNOTATEMONITORVALUE>").Append(Upper(v.AnnotateMonitorValue)).Append("</ts:ANNOTATEMONITORVALUE>");
+        sb.Append("<ts:ANNOTATE>").Append(v.Annotate ? "true" : "false").Append("</ts:ANNOTATE>");
+        if (v.Annotation.Length > 0)
+            sb.Append("<ts:TEXT>").Append(Esc(v.Annotation)).Append("</ts:TEXT>");
+        else
+            sb.Append("<ts:TEXT />");
+        sb.Append("</ts:FBDITEM_EXT>");
+        AppendPosition(sb, v.X, v.Y, sheet.Number);
+
+        bool hasIn = tag == "inOutVariable" || tag == "outVariable";
+        bool hasOut = tag == "inVariable" || tag == "inOutVariable";
+        if (hasIn)
+        {
+            sb.Append("<connectionPointIn><relPosition x=\"-1\" y=\"1\" />");
+            int start = v.InWire >= 0 ? v.InWire : FindSinkWire(ctx, v);
+            EmitResolved(sb, ctx, v.OldId, v.Name, start, (v.X - 1, v.Y + 1));
+            sb.Append("</connectionPointIn>");
+        }
+        if (hasOut)
+            sb.Append("<connectionPointOut><relPosition x=\"").Append(v.W + 1)
+              .Append("\" y=\"1\" /></connectionPointOut>");
+
+        sb.Append("<expression>").Append(Esc(v.Name)).Append("</expression>");
+        sb.Append("</").Append(tag).Append(">\n");
+    }
+
+    // ------------------------------------------------------------------
+    // Connection resolution
+    //
+    // A sink pin stores connectId pointing at a wire OR (wireless link)
+    // directly at an element.  Wire endpoints do not imply direction, so
+    // the source is always derived by walking upstream from the sink:
+    //   * start wire must contain the sink element as an endpoint
+    //   * an endpoint whose connectId is another wire is a tap junction;
+    //     the shared position must be a vertex of that wire, otherwise the
+    //     link is stale and ref drops it
+    //   * direction across a tap is chosen by pin type (output = upstream)
+    //   * links whose source or sink is a collapsed block are dropped
+    //   * intermediate collinear positions are removed
+    // ------------------------------------------------------------------
+
+    private static void EmitResolved(StringBuilder sb, FbdCtx ctx, int sinkId, string sinkPin,
+        int startId, (int X, int Y) sinkPos)
+    {
+        if (!ResolveConn(ctx, sinkId, sinkPin, startId, sinkPos, out int srcId, out string srcPin,
+                out var path, out string feedBack))
+            return;
+
+        sb.Append("<connection refLocalId=\"").Append(srcId).Append('"');
+        if (ctx.BlockIds.Contains(srcId) && srcPin.Length > 0)
+            sb.Append(" formalParameter=\"").Append(Esc(srcPin)).Append('"');
+        if (feedBack.Length > 0)
+            sb.Append(" ts:FeedBack=\"").Append(feedBack).Append('"');
+        sb.Append('>');
+        foreach (var q in path)
+            sb.Append("<position x=\"").Append(q.X).Append("\" y=\"").Append(q.Y).Append("\" />");
+        sb.Append("</connection>");
+    }
+
+    private static bool ResolveConn(FbdCtx ctx, int sinkId, string sinkPin, int startId,
+        (int X, int Y) sinkPos, out int srcId, out string srcPin,
+        out List<(int X, int Y)> path, out string feedBack)
+    {
+        srcId = -1; srcPin = ""; path = null!; feedBack = "";
+        if (startId < 0) return false;
+        if (ctx.Collapsed.Contains(sinkId)) return false;
+
+        // ---- wireless link: startId names the source element itself ----
+        if (!ctx.WireById.TryGetValue(startId, out var w0))
+        {
+            if (!ctx.ElemById.TryGetValue(startId, out var direct)) return false;
+            if (ctx.Collapsed.Contains(startId)) return false;
+            if (startId == sinkId) return false;
+            var sp = SrcPortPos(direct, sinkId) ?? sinkPos;
+            srcId = startId;
+            srcPin = ctx.BlockIds.Contains(startId) ? DirectSrcPin(direct, sinkId) : "";
+            path = new List<(int, int)> { sinkPos, sp };
+            return true;
+        }
+
+        if (w0.Positions.Count == 0) return false;
+
+        bool sinkIsA;
+        if (w0.AId == sinkId && w0.BId != sinkId) sinkIsA = true;
+        else if (w0.BId == sinkId && w0.AId != sinkId) sinkIsA = false;
+        else if (w0.AId == sinkId && w0.BId == sinkId)
+            sinkIsA = sinkPin.Length == 0 || w0.APin == sinkPin;
+        else return false;                       // stale: wire never touches the sink
+
+        var raw = new List<(int X, int Y)>();
+        if (sinkIsA) raw.AddRange(w0.Positions);
+        else for (int i = w0.Positions.Count - 1; i >= 0; i--) raw.Add(w0.Positions[i]);
+
+        var seen = new HashSet<int> { w0.OldId };
+        int othId = sinkIsA ? w0.BId : w0.AId;
+        string othPin = sinkIsA ? w0.BPin : w0.APin;
+
+        for (int guard = 0; ctx.WireById.ContainsKey(othId); guard++)
+        {
+            if (guard > 64) return false;
+            var w2 = ctx.WireById[othId];
+            if (w2.Positions.Count == 0) return false;
+            if (!seen.Add(w2.OldId)) return false;
+
+            var tap = raw[raw.Count - 1];
+            int j = w2.Positions.IndexOf(tap);
+            if (j < 0) return false;                       // stale junction
+
+            int end = ChooseSourceEnd(ctx, w2);
+            if (end < 0) return false;
+            int sp = end == 0 ? 0 : w2.Positions.Count - 1;
+
+            if (sp > j) for (int q = j + 1; q <= sp; q++) raw.Add(w2.Positions[q]);
+            else if (sp < j) for (int q = j - 1; q >= sp; q--) raw.Add(w2.Positions[q]);
+
+            othId = end == 0 ? w2.AId : w2.BId;
+            othPin = end == 0 ? w2.APin : w2.BPin;
+        }
+
+        if (!ctx.ElemById.ContainsKey(othId)) return false;
+        if (othId == sinkId) return false;
+        if (ctx.Collapsed.Contains(othId)) return false;
+
+        srcId = othId;
+        srcPin = ctx.BlockIds.Contains(othId) ? othPin : "";
+        feedBack = w0.FeedBack ? "true" : "false";
+
+        path = new List<(int, int)>(raw.Count);
+        foreach (var q in raw) path.Add((Pos(q.X), Pos(q.Y)));
+        SimplifyCollinear(path);
+        return path.Count >= 2;
+    }
+
+    /// <summary>Index (0 = positions[0], 1 = positions[^1]) of the upstream endpoint of a tap wire.</summary>
+    private static int ChooseSourceEnd(FbdCtx ctx, Pt2Wire w)
+    {
+        int n = w.Positions.Count;
+        int rA = RoleOf(ctx, w.AId, w.APin, w.Positions[0]);
+        int rB = RoleOf(ctx, w.BId, w.BPin, w.Positions[n - 1]);
+        if (rA == RoleSrc && rB != RoleSrc) return 0;
+        if (rB == RoleSrc && rA != RoleSrc) return 1;
+        if (rA == RoleWire && rB != RoleWire) return 0;
+        if (rB == RoleWire && rA != RoleWire) return 1;
+        return -1;
+    }
+
+    private static int RoleOf(FbdCtx ctx, int id, string pin, (int X, int Y) rawPos)
+    {
+        if (id >= 0 && ctx.ElemById.TryGetValue(id, out var e))
+        {
+            int px = Pos(rawPos.X);
+            if (e is Pt2BlockElem b)
+            {
+                bool isIn = false, isOut = false;
+                foreach (var i in b.Inputs) if (i.Name == pin) isIn = true;
+                foreach (var o in b.Outputs) if (o.Name == pin) isOut = true;
+                if (isIn != isOut) return isIn ? RoleSnk : RoleSrc;
+                return px >= b.X + b.W ? RoleSrc : RoleSnk;
+            }
+            if (e is Pt2VarElem v)
+            {
+                if (v.Kind == "inVariable") return RoleSrc;
+                if (v.Kind == "outVariable") return RoleSnk;
+                return px >= v.X + v.W ? RoleSrc : RoleSnk;
+            }
+            return RoleUnknown;
+        }
+        if (id >= 0 && ctx.WireById.ContainsKey(id)) return RoleWire;
+        return RoleUnknown;
+    }
+
+    /// <summary>Var input links are only present when inConnectId is stored; fall back to a scan.</summary>
+    private static int FindSinkWire(FbdCtx ctx, Pt2VarElem v)
+    {
+        foreach (var kv in ctx.WireById)
+        {
+            var w = kv.Value;
+            if (w.Positions.Count == 0) continue;
+            if (w.AId == v.OldId && RoleOf(ctx, w.AId, w.APin, w.Positions[0]) == RoleSnk) return w.OldId;
+            if (w.BId == v.OldId && RoleOf(ctx, w.BId, w.BPin, w.Positions[w.Positions.Count - 1]) == RoleSnk)
+                return w.OldId;
+        }
+        return -1;
+    }
+
+    private static string DirectSrcPin(Pt2Elem src, int sinkId)
+    {
+        if (src is Pt2BlockElem b)
+            foreach (var o in b.Outputs) if (o.Wire == sinkId) return o.Name;
+        return "";
+    }
+
+    private static (int X, int Y)? SrcPortPos(Pt2Elem src, int sinkId)
+    {
+        if (src is Pt2BlockElem b)
+        {
+            for (int j = 0; j < b.Outputs.Count; j++)
+                if (b.Outputs[j].Wire == sinkId) return (b.X + b.W + 1, b.Y + 4 + 4 * j);
+            return null;
+        }
+        if (src is Pt2VarElem v) return (v.X + v.W + 1, v.Y + 1);
+        return null;
+    }
+
+    private static void SimplifyCollinear(List<(int X, int Y)> p)
+    {
+        if (p.Count < 3) return;
+        var keep = new List<(int X, int Y)> { p[0] };
+        for (int i = 1; i < p.Count - 1; i++)
+        {
+            var a = keep[keep.Count - 1];
+            var b = p[i];
+            var c = p[i + 1];
+            long cross = (long)(b.X - a.X) * (c.Y - a.Y) - (long)(b.Y - a.Y) * (c.X - a.X);
+            if (cross != 0) keep.Add(b);
+        }
+        keep.Add(p[p.Count - 1]);
+        p.Clear();
+        p.AddRange(keep);
+    }
+
+    private static void EmitComment(StringBuilder sb, Pt2CommentElem c, int sheet)
+    {
+        sb.Append("            <comment localId=\"").Append(c.OldId)
+          .Append("\" height=\"").Append(c.H).Append("\" width=\"").Append(c.W).Append("\">");
+        sb.Append("<ts:COMMENT_EXT>");
+        sb.Append("<ts:TEXTALIGNMENT>").Append(Esc(c.Align)).Append("</ts:TEXTALIGNMENT>");
+        sb.Append("<ts:BORDER>").Append(Esc(c.Border)).Append("</ts:BORDER>");
+        sb.Append("<ts:TEXTSIZE>").Append(c.TextSize).Append("</ts:TEXTSIZE>");
+        sb.Append("<ts:EXPANDMACROS>").Append(Upper(c.ExpandMacros)).Append("</ts:EXPANDMACROS>");
+        sb.Append("<ts:MACROEDITING>").Append(Upper(c.MacroEditing)).Append("</ts:MACROEDITING>");
+        sb.Append("<ts:BEHINDLOGIC>").Append(Upper(c.BehindLogic)).Append("</ts:BEHINDLOGIC>");
+        sb.Append("</ts:COMMENT_EXT>");
         AppendPosition(sb, c.X, c.Y, sheet);
         sb.Append("<content><![CDATA[").Append(CData(c.Text)).Append("]]></content>");
         sb.Append("</comment>\n");
     }
 
+    private static string Upper(bool b) => b ? "TRUE" : "FALSE";
+
     private static void AppendPosition(StringBuilder sb, int x, int y, int sheet) =>
         sb.Append("<position x=\"").Append(x).Append("\" y=\"").Append(y)
           .Append("\" ts:SheetNumber=\"").Append(sheet).Append("\" />");
-
-    private static void AppendConnection(StringBuilder sb, int refId, string pin, (int X, int Y) src, (int X, int Y) target)
-    {
-        sb.Append("<connection refLocalId=\"").Append(refId).Append('"');
-        if (pin.Length > 0) sb.Append(" formalParameter=\"").Append(Esc(pin)).Append('"');
-        sb.Append(" ts:FeedBack=\"false\">");
-        sb.Append("<position x=\"").Append(src.X).Append("\" y=\"").Append(src.Y).Append("\" />");
-        sb.Append("<position x=\"").Append(target.X).Append("\" y=\"").Append(target.Y).Append("\" />");
-        sb.Append("</connection>");
-    }
 
     // ---------------------------------------------------------------- instances / tags
 
@@ -1273,6 +1581,8 @@ public sealed class FromPt2
         public string Title = "";
         public List<Pt2Elem> Elems = new();
         public List<Pt2Wire> Wires = new();
+        public List<Pt2Divider> Dividers = new();
+        public string[] Macros = new string[10];
     }
 
     private abstract class Pt2Elem
@@ -1288,16 +1598,24 @@ public sealed class FromPt2
         public string TypeName = "";
         public string Instance = "";
         public bool IsFunction;
+        public bool DoubleSpace;
+        /// <summary>Collapsed runtime marker (snapEventId="0"); exports with height 4 and no pins.</summary>
+        public bool Collapsed;
         public List<Pt2Pin> Inputs = new();
-        public List<string> Outputs = new();
+        public List<Pt2Pin> Outputs = new();
     }
 
+    /// <summary>Wire may reference a wire id or (for direct, wire-less links) an element id.</summary>
     private sealed class Pt2Pin { public string Name = ""; public int Wire = -1; }
 
     private sealed class Pt2VarElem : Pt2Elem
     {
         public string Name = "";
         public string VarType = "";
+        public string Kind = "";
+        public string DataType = "";
+        public bool IsConstant;
+        public bool AnnotateMonitorValue;
         public string Annotation = "";
         public bool Annotate;
         public int InWire = -1;
@@ -1312,16 +1630,39 @@ public sealed class FromPt2
         public int TextSize = 10;
         public bool BehindLogic;
         public bool ExpandMacros;
+        public bool MacroEditing;
+    }
+
+    private sealed class Pt2Divider
+    {
+        public int OldId;
+        public string Orientation = "HORIZONTAL";
+        public int X, Y, W, H;
+        public int RawX, RawY, RawW, RawH;
     }
 
     private sealed class Pt2Wire
     {
         public int OldId;
-        public int SrcId = -1;
-        public string SrcPin = "";
-        public int SinkId = -1;
-        public string SinkPin = "";
-        /// <summary>Manhattan path exactly as stored (raw export units, source → target).</summary>
+        /// <summary>Embed="input" endpoint — always positions[0]. Role is NOT implied.</summary>
+        public int AId = -1;
+        public string APin = "";
+        /// <summary>Embed="output" endpoint — always positions[^1]. Role is NOT implied.</summary>
+        public int BId = -1;
+        public string BPin = "";
+        /// <summary>Manhattan path exactly as stored (raw export units, no direction).</summary>
         public List<(int X, int Y)> Positions = new();
+        /// <summary>Native feedBack flag; exported as ts:FeedBack for wire-backed links.</summary>
+        public bool FeedBack;
     }
+
+    private sealed class FbdCtx
+    {
+        public Dictionary<int, Pt2Wire> WireById = new();
+        public Dictionary<int, Pt2Elem> ElemById = new();
+        public HashSet<int> BlockIds = new();
+        public HashSet<int> Collapsed = new();
+    }
+
+    private const int RoleUnknown = 0, RoleSrc = 1, RoleSnk = 2, RoleWire = 3;
 }
