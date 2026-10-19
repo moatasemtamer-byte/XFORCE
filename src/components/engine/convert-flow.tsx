@@ -3,7 +3,7 @@
 import { Fragment, type ReactNode } from "react";
 import { nx } from "@/components/nx/primitives";
 
-export type SourceKind = "pdf" | "lpt" | "xml" | "ap" | "unknown";
+export type SourceKind = "pdf" | "lpt" | "xml" | "pt2" | "ap" | "unknown";
 export type TargetKind = "xml" | "pt2x" | "tia";
 
 export const SOURCE_FORMATS: Array<{
@@ -15,6 +15,7 @@ export const SOURCE_FORMATS: Array<{
   { kind: "pdf", label: "Ladder logic PDF", short: "PDF", detail: "Printed ladder logic (.pdf)" },
   { kind: "lpt", label: "TRISTATION listing", short: "LPT", detail: "Text logic export (.lpt)" },
   { kind: "xml", label: "TriStation XML", short: "XML", detail: "PLCopen export (.xml)" },
+  { kind: "pt2", label: "TriStation PT2X", short: "PT2X", detail: "TriStation container (.pt2/.pt2x)" },
   { kind: "ap", label: "Siemens TIA export", short: "AP", detail: "SimaticML export (.zip/.xml)" },
 ];
 
@@ -35,6 +36,7 @@ export const TARGETS_BY_SOURCE: Record<SourceKind, TargetKind[]> = {
   pdf: ["xml", "pt2x", "tia"],
   lpt: ["xml", "pt2x", "tia"],
   xml: ["pt2x", "tia"],
+  pt2: ["xml", "tia"],
   ap: ["xml", "pt2x"],
   unknown: ["xml", "pt2x", "tia"],
 };
@@ -49,6 +51,7 @@ export function sourceKindForFile(name: string | undefined | null): SourceKind {
   if (ext === "pdf") return "pdf";
   if (ext === "lpt" || ext === "txt") return "lpt";
   if (ext === "xml") return "xml";
+  if (ext === "pt2" || ext === "pt2x") return "pt2";
   if (AP_EXTENSIONS.has(ext)) return "ap";
   return "unknown";
 }
@@ -87,6 +90,12 @@ export function SourceGlyph({ kind, className = "nx-icon" }: { kind: SourceKind;
         <>
           <path d="M9 7 5 12l4 5" strokeLinecap="round" strokeLinejoin="round" />
           <path d="m15 7 4 5-4 5" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      ) : null}
+      {kind === "pt2" ? (
+        <>
+          <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" strokeLinejoin="round" />
+          <path d="m4 7.5 8 4.5 8-4.5M12 12v9" />
         </>
       ) : null}
       {kind === "ap" ? (
@@ -248,7 +257,7 @@ export function pipelineNodes(sourceKind: SourceKind, target: TargetKind, source
   const nodes: PipelineNode[] = [
     { key: "read", label: sourceName ?? "Source", glyph: <SourceGlyph kind={sourceKind} /> },
   ];
-  if (sourceKind !== "xml") {
+  if (sourceKind !== "xml" && target !== "xml") {
     nodes.push({ key: "xml", label: "XML", glyph: <TargetGlyph kind="xml" /> });
   }
   const finalGlyph: ReactNode =

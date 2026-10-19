@@ -28,6 +28,28 @@ public static class Pt2Importer
             && bytes[4] == 0xA1 && bytes[5] == 0xB1 && bytes[6] == 0x1A && bytes[7] == 0xE1;
     }
 
+    /// <summary>True when the bytes start with the gzip magic number (1F 8B).</summary>
+    public static bool LooksLikeGzip(byte[] bytes)
+    {
+        return bytes.Length >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B;
+    }
+
+    /// <summary>
+    /// Returns the bytes transparently gunzipped when the payload is gzip, otherwise the input
+    /// unchanged. A TriStation container compresses enormously (its OLE sectors are padded), so the
+    /// browser sends it gzipped and this reverses that before any parsing happens.
+    /// </summary>
+    public static byte[] DecompressIfGzip(byte[] bytes)
+    {
+        if (!LooksLikeGzip(bytes)) return bytes;
+
+        using var input = new MemoryStream(bytes);
+        using var gunzip = new System.IO.Compression.GZipStream(input, System.IO.Compression.CompressionMode.Decompress);
+        using var output = new MemoryStream();
+        gunzip.CopyTo(output);
+        return output.ToArray();
+    }
+
     public static async Task<Result> ConvertAsync(byte[] source, string sourceName, CancellationToken cancellationToken)
     {
         var executable = Pt2xBuilder.ResolveExecutable();

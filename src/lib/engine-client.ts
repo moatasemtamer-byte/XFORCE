@@ -56,6 +56,81 @@ async function* multipartParts(form: FormData, boundary: string): AsyncGenerator
   yield Buffer.from(`--${boundary}--\r\n`, "utf8");
 }
 
+/**
+ * Forwards an already-encoded request body straight to the engine without
+ * re-parsing or re-encoding it. Use this when the caller has a raw body and its
+ * content-type (e.g. proxying the browser's multipart upload): parsing it into a
+ * FormData and rebuilding it is needlessly slow for large projects.
+ */
+export async function postEngineRaw(
+  endpoint: string,
+  body: Uint8Array | ReadableStream<Uint8Array> | Readable,
+  contentType: string,
+  options: { timeoutMs: number; headers?: Record<string, string> },
+): Promise<EngineResponse> {
+  const url = new URL(endpoint);
+  const transport = url.protocol === "https:" ? https : http;
+
+  const source =
+    body instanceof Readable
+      ? body
+      : body instanceof Uint8Array
+        ? Readable.from(body)
+        : Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        path: `${url.pathname}${url.search}`,
+        method: "POST",
+        headers: { ...options.headers, "content-type": contentType },
+      },
+      (response) => {
+        const parts: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => parts.push(chunk));
+        response.on("end", () => {
+          clearTimeout(deadline);
+          const raw = Buffer.concat(parts).toString("utf8");
+          let json: unknown = null;
+          try {
+            json = raw ? JSON.parse(raw) : null;
+          } catch {
+            json = null;
+          }
+          const status = response.statusCode ?? 500;
+          resolve({ ok: status >= 200 && status < 300, status, json, raw });
+        });
+        response.on("error", (error) => {
+          clearTimeout(deadline);
+          reject(error);
+        });
+      },
+    );
+
+    request.setTimeout(0);
+
+    const deadline = setTimeout(() => {
+      request.destroy();
+      reject(new EngineTimeoutError("the engine did not finish before the deadline"));
+    }, options.timeoutMs);
+
+    request.on("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+
+    source.on("error", (error) => {
+      clearTimeout(deadline);
+      request.destroy();
+      reject(error);
+    });
+    source.pipe(request);
+  });
+}
+
 export async function postEngine(
   endpoint: string,
   form: FormData,

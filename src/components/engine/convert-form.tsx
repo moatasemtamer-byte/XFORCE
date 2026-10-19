@@ -87,6 +87,35 @@ function download(artifact: Artifact) {
   URL.revokeObjectURL(url);
 }
 
+// POSTs the convert form while reporting byte-level upload progress. fetch cannot
+// report send progress, so this uses XMLHttpRequest. Resolves with the parsed
+// response once the engine answers (which may be minutes after the upload ends).
+function postConvert(
+  url: string,
+  body: FormData,
+  onProgress: (fraction: number) => void,
+): Promise<{ status: number; ok: boolean; json: ConvertResult }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      let json: ConvertResult = {};
+      try {
+        json = JSON.parse(xhr.responseText) as ConvertResult;
+      } catch {
+        json = {};
+      }
+      resolve({ status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, json });
+    };
+    xhr.onerror = () => reject(new Error("The upload connection failed."));
+    xhr.onabort = () => reject(new Error("The conversion was cancelled."));
+    xhr.send(body);
+  });
+}
+
 // Stashes a freshly built .pt2x in sessionStorage so the project viewer can
 // decompile and render it without the user re-uploading the file.
 function stashForViewer(artifact: Artifact) {
@@ -107,6 +136,8 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
   const [cpu, setCpu] = useState(DEFAULT_CPU_ORDER_NUMBER);
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const [runPhase, setRunPhase] = useState<"idle" | "uploading" | "converting">("idle");
+  const [uploadPct, setUploadPct] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [lastDurationMs, setLastDurationMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -228,6 +259,8 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
     event.preventDefault();
     if (!file) return;
     setBusy(true);
+    setRunPhase("uploading");
+    setUploadPct(0);
     setElapsedMs(0);
     setError(null);
     setErrorLog(null);
@@ -251,8 +284,13 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
       if (dptFile) body.set("dpt", dptFile);
       if (templateFile) body.set("template", templateFile);
       const endpoint = tiaTarget && buildProject ? "/api/engine/convert/project" : "/api/engine/convert";
-      const response = await fetch(endpoint, { method: "POST", body });
-      const json = (await response.json()) as ConvertResult;
+      const response = await postConvert(endpoint, body, (fraction) => {
+        const pct = Math.round(fraction * 100);
+        setUploadPct(pct);
+        // The upload is done once the bytes leave; the engine is now converting.
+        if (pct >= 100) setRunPhase("converting");
+      });
+      const json = response.json;
       if (!response.ok) {
         failed = true;
         setError(json.error ?? `The engine returned ${response.status}.`);
@@ -267,6 +305,7 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
       setError(cause instanceof Error ? cause.message : "The conversion request failed.");
     } finally {
       setBusy(false);
+      setRunPhase("idle");
       // A failed run clears the cursor so the retry starts from the top; a successful one
       // keeps the terminal stage ("done") so every station stays checked.
       if (failed) setProgressStage(null);
@@ -519,7 +558,7 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
             {busy ? (
               <>
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                Converting… ({formatDuration(elapsedMs)})
+                {runPhase === "uploading" ? `Uploading… ${uploadPct}%` : `Converting… (${formatDuration(elapsedMs)})`}
               </>
             ) : (
               <>Convert to {targetLabel(target)}</>
@@ -562,10 +601,13 @@ export function EngineConvertForm({ error: engineError }: { error: string | null
                 <div className="flex items-center justify-between text-[11px] text-nx-hint">
                   <span className="inline-flex items-center gap-1.5">
                     <span className="inline-block h-1.5 w-1.5 animate-pulse bg-nx-green-700" />
-                    Working — this can take a few minutes.
+                    {runPhase === "uploading"
+                      ? `Uploading the file — ${uploadPct}%`
+                      : "Working — this can take a few minutes."}
                   </span>
                   <span className="tabular-nums">{formatDuration(elapsedMs)}</span>
                 </div>
+                <p className="text-[11px] text-nx-hint">Controls are disabled until the engine answers.</p>
               </div>
             ) : null}
           </NxPanelBody>

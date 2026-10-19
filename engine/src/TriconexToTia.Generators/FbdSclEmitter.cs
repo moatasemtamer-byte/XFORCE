@@ -588,7 +588,7 @@ public sealed class FbdSclEmitter
     /// </summary>
     private string RenderSource(SignalSource source, string? expectedType)
     {
-        var value = ValueOf(source);
+        var value = ValueOf(source, expectedType);
         if (string.IsNullOrWhiteSpace(expectedType)) return value;
         return Coerce(value, TypeOfSignal(source), expectedType) ?? value;
     }
@@ -736,8 +736,8 @@ public sealed class FbdSclEmitter
     }
 
     /// <summary>The expression that carries a signal, inlining function calls.</summary>
-    private string ValueOf(SignalSource source) => source.IsBlockOutput
-        ? BlockOutput(source.RefSheetNumber, source.RefLocalId!, source.RefFormalParameter)
+    private string ValueOf(SignalSource source, string? expectedType = null) => source.IsBlockOutput
+        ? BlockOutput(source.RefSheetNumber, source.RefLocalId!, source.RefFormalParameter, expectedType)
         : Qualify(source.Expression ?? string.Empty);
 
     /// <summary>Every wired input value of a call, in wiring order.</summary>
@@ -822,7 +822,7 @@ public sealed class FbdSclEmitter
             $@"(?<![A-Za-z0-9_])#?{Regex.Escape(bare)}(?![A-Za-z0-9_])");
     }
 
-    private string BlockOutput(int sheet, string localId, string? formalParameter)
+    private string BlockOutput(int sheet, string localId, string? formalParameter, string? expectedType = null)
     {
         var key = Key(sheet, localId);
         if (!_callsBySheetKey.TryGetValue(key, out var call))
@@ -837,10 +837,23 @@ public sealed class FbdSclEmitter
         // end. Cut the cycle at the first repeated key and flag it rather than overflowing the stack.
         if (!_resolving.Add(key))
         {
+            // A TriStation feedback wire means the consumer reads the signal's value from the
+            // previous scan. The variable the cut output is bound to keeps its value across scans,
+            // so reading it reproduces the feedback without recursing.
+            if (_assignmentsByCall.TryGetValue(key, out var bindings) && bindings.Count > 0)
+            {
+                var retained = Qualify(bindings[0].Target);
+                _notes.Add(
+                    $"sheet {sheet} localId {localId}: circular reference (an output feeds back into itself); " +
+                    $"the cycle was cut by reading the retained (previous-scan) value {retained}. " +
+                    "Check the affected signals by hand.");
+                return retained;
+            }
+
             _notes.Add(
-                $"sheet {sheet} localId {localId}: circular reference (an output feeds back into itself); " +
-                "the cycle was cut. Check the affected signals by hand.");
-            return "<cycle>";
+                $"sheet {sheet} localId {localId}: circular reference (an output feeds back into itself) and " +
+                "no variable holds its value; a default was substituted. Check the affected signals by hand.");
+            return DefaultValueFor(call, expectedType);
         }
 
         try
@@ -851,6 +864,27 @@ public sealed class FbdSclEmitter
         {
             _resolving.Remove(key);
         }
+    }
+
+    /// <summary>A compile-safe default for a cut signal, typed from its producing block.</summary>
+    private static string DefaultValueFor(BlockCall call, string? expectedType)
+    {
+        var type = expectedType;
+        if (string.IsNullOrWhiteSpace(type))
+        {
+            type = call.Outputs
+                .Select(output => output.ExpectedType)
+                .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? call.ResultType;
+        }
+
+        if (type is null) return "FALSE";
+        return type.ToUpperInvariant() switch
+        {
+            "BOOL" => "FALSE",
+            "REAL" or "LREAL" => "0.0",
+            "TIME" => "T#0ms",
+            _ => "0",
+        };
     }
 
     private string ResolveBlockOutput(BlockCall call, string? formalParameter)

@@ -29,6 +29,13 @@ public sealed class PlcOpenXmlParser
 
     private PlcProject _project = new();
 
+    /// <summary>
+    /// Every global variable name already seen, so a point that the export lists in more than one
+    /// place (the controller list and a POU interface, or a program that is emitted twice) is only
+    /// declared once in the generated data block.
+    /// </summary>
+    private readonly HashSet<string> _globalNames = new(StringComparer.OrdinalIgnoreCase);
+
     public PlcProject ParseFile(string path)
     {
         using var stream = File.OpenRead(path);
@@ -40,6 +47,7 @@ public sealed class PlcOpenXmlParser
     public PlcProject Parse(Stream stream, string sourceFile = "")
     {
         _project = new PlcProject { SourceFile = sourceFile };
+        _globalNames.Clear();
 
         var settings = new XmlReaderSettings
         {
@@ -258,7 +266,15 @@ public sealed class PlcOpenXmlParser
                 _ => VariableDirection.Local,
             };
 
-            if (direction == VariableDirection.Global) continue;
+            if (direction == VariableDirection.Global)
+            {
+                // A POU interface <globalVars> block lists the program's own global memory. In
+                // TriStation these points persist across scans (seal-in latches, step bits), so they
+                // are neither tags nor block locals: they are materialised in the generated global
+                // data block. Dropping them leaves every statement that references them undefined.
+                ReadGlobalVariables(group);
+                continue;
+            }
 
             var constant = string.Equals(group.Attr("constant"), "true", StringComparison.OrdinalIgnoreCase);
 
@@ -787,6 +803,7 @@ var items = new List<LogicItem>();
         {
             var variable = ReadVariable(element, VariableDirection.Global, constant: false);
             if (variable is null) continue;
+            if (!_globalNames.Add(variable.Name)) continue;
 
             var metadata = ReadTagMetadata(element.Element(Ts + "TAGNAME"));
 

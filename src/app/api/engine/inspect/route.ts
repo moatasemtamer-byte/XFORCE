@@ -1,43 +1,47 @@
-import { NextResponse } from "next/server";
-import { engineToken, engineUrl } from "@/lib/env";
+import { engineUrl } from "@/lib/env";
+import { startInspect } from "@/lib/inspect-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Proxies a TriStation project (.pt2/.pt2x) to the engine's /api/inspect so the
-// browser never talks to the engine directly and the bearer token stays server-side.
-// The engine answers with the JSON model the viewer renders.
+// Starts a TriStation project (.pt2/.pt2x) inspection.
+//
+// The browser's multipart upload is forwarded to the engine as raw bytes, never
+// parsed: reading it into a FormData and re-encoding it was an order of magnitude
+// slower for large projects and held the POST open long enough for the platform
+// edge to drop it. The bytes are collected here first, then the engine call runs
+// detached, so the request the browser waits on lasts only as long as the upload
+// itself -- which is what lets the viewer work from any network.
+//
+// The POST returns a job id; the viewer polls GET /api/engine/inspect/{id} for the
+// model. See lib/inspect-jobs for why the response is split this way.
 
 export async function POST(request: Request) {
   const base = engineUrl();
   if (!base) {
-    return NextResponse.json({ error: "MSW_ENGINE_URL is not configured." }, { status: 503 });
+    return Response.json(
+      { error: "The conversion engine is not configured, so projects cannot be inspected." },
+      { status: 503 },
+    );
   }
 
-  const form = await request.formData().catch(() => null);
-  const file = form?.get("file");
-  if (!(file instanceof File) || file.size === 0) {
-    return NextResponse.json({ error: "No project file was uploaded." }, { status: 400 });
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("multipart/form-data") || !request.body) {
+    return Response.json({ error: "Expected a multipart/form-data upload." }, { status: 400 });
   }
 
-  const headers: Record<string, string> = {};
-  const token = engineToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-
+  let body: Buffer;
   try {
-    const response = await fetch(`${base.replace(/\/+$/, "")}/api/inspect`, {
-      method: "POST",
-      headers,
-      body: form,
-      cache: "no-store",
-      signal: AbortSignal.timeout(120_000),
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      return NextResponse.json(payload ?? { error: "The engine could not open that project." }, { status: response.status });
-    }
-    return NextResponse.json(payload);
+    body = Buffer.from(await request.arrayBuffer());
   } catch {
-    return NextResponse.json({ error: "The engine could not be reached." }, { status: 502 });
+    return Response.json({ error: "The upload was interrupted before it finished." }, { status: 400 });
   }
+
+  if (body.length === 0) {
+    return Response.json({ error: "No project file was uploaded." }, { status: 400 });
+  }
+
+  const name = new URL(request.url).searchParams.get("name") || "project";
+  const job = startInspect(body, contentType, base, name);
+  return Response.json({ id: job.id }, { status: 202 });
 }

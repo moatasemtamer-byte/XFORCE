@@ -17,6 +17,71 @@ const POU_LABEL: Record<string, string> = {
 
 const SECTION_ORDER = ["input", "output", "inOut", "local"];
 
+const GZIP_UPLOAD_THRESHOLD = 256 * 1024;
+
+// Phases the viewer moves through for one file, shown to the user while the
+// server is busy. "uploading" reports a real percentage; the others are states.
+type Phase = "idle" | "compressing" | "uploading" | "reading" | "viewing" | "error";
+
+const PHASE_LABEL: Record<Exclude<Phase, "idle" | "error">, string> = {
+  compressing: "Preparing the file…",
+  uploading: "Uploading",
+  reading: "Reading the project…",
+  viewing: "Building the sheets…",
+};
+
+/**
+ * Gzips a project before upload when the browser supports streaming compression.
+ * TriStation containers compress ~15:1, so this is the difference between a ~40 s
+ * upload over a slow link and a couple of seconds. Returns the original file
+ * unchanged for small files, unsupported browsers, or when compression does not
+ * actually shrink the payload.
+ */
+async function gzipForUpload(file: File): Promise<Blob> {
+  if (file.size < GZIP_UPLOAD_THRESHOLD || typeof CompressionStream === "undefined") return file;
+  try {
+    const compressed = await new Response(
+      file.stream().pipeThrough(new CompressionStream("gzip")),
+    ).blob();
+    return compressed.size < file.size ? compressed : file;
+  } catch {
+    return file;
+  }
+}
+
+/**
+ * POSTs the file to the inspect route while reporting upload progress. The browser
+ * does not expose send progress on `fetch`, so this uses XMLHttpRequest, whose
+ * `upload.onprogress` fires as bytes leave. Resolves with the parsed job id, or
+ * rejects with the server's error message.
+ */
+function uploadForInspect(
+  url: string,
+  body: FormData,
+  onProgress: (fraction: number) => void,
+): Promise<{ id?: string; error?: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      let parsed: { id?: string; error?: string } = {};
+      try {
+        parsed = JSON.parse(xhr.responseText) as { id?: string; error?: string };
+      } catch {
+        parsed = {};
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(parsed);
+      else reject(new Error(parsed.error ?? `The server returned ${xhr.status}.`));
+    };
+    xhr.onerror = () => reject(new Error("The upload connection failed."));
+    xhr.onabort = () => reject(new Error("The upload was cancelled."));
+    xhr.send(body);
+  });
+}
+
 function PouDetail({
   pou,
   projectName,
@@ -179,10 +244,14 @@ function PouInterface({ pou }: { pou: InspectPou }) {
 export function PtxViewer() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  // Set when the viewer unmounts (or a new inspection starts) so a poll loop that
+  // is mid-flight stops touching state for a job nobody is watching anymore.
+  const cancelledRef = useRef(false);
   const [project, setProject] = useState<InspectProject | null>(null);
   const [sourceName, setSourceName] = useState<string>("");
   const [pouName, setPouName] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [uploadPct, setUploadPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
@@ -190,33 +259,93 @@ export function PtxViewer() {
   const [tab, setTab] = useState<"interface" | "tags">("interface");
   const [zoom, setZoom] = useState<SheetZoom>("fit");
 
+  // Controls are locked for every phase except idle/error.
+  const busy = phase !== "idle" && phase !== "error";
+
   const inspect = useCallback(async (file: File) => {
-    setBusy(true);
+    cancelledRef.current = false;
     setError(null);
+    setProject(null);
+    setUploadPct(0);
+    setPhase("compressing");
     const startedAt = Date.now();
     try {
+      // A TriStation container is an OLE/CFB file whose streams sit in padded
+      // sectors, so it gzips roughly 15:1. Uploading the compressed form turns a
+      // slow ~40 s transfer into a couple of seconds; the engine gunzips it before
+      // parsing. If the browser cannot compress, fall back to the raw bytes.
+      const payload = await gzipForUpload(file);
+      if (cancelledRef.current) return;
+
+      setPhase("uploading");
       const body = new FormData();
-      body.append("file", file, file.name);
-      const response = await fetch("/api/engine/inspect", { method: "POST", body });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        setError(payload?.error ?? `The engine could not open that file (${response.status}).`);
-        setProject(null);
+      body.append("file", payload, `${file.name}.gz`);
+      const started = await uploadForInspect(
+        `/api/engine/inspect?name=${encodeURIComponent(file.name)}`,
+        body,
+        (fraction) => {
+          if (!cancelledRef.current) setUploadPct(Math.round(fraction * 100));
+        },
+      );
+      if (cancelledRef.current) return;
+
+      if (typeof started.id !== "string") {
+        setError(started.error ?? "The engine could not open that file.");
+        setPhase("error");
         return;
       }
-      const model = payload as InspectProject;
-      setProject(model);
-      setSourceName(file.name);
-      setPouName(model.pous[0]?.name ?? null);
+
+      // The bytes are in and the engine is decompiling; show that instead of "100%".
+      setPhase("reading");
+
+      const id = started.id;
+      const deadline = startedAt + 10 * 60 * 1000;
+      for (;;) {
+        if (Date.now() > deadline) {
+          setError("Reading this project took too long and was stopped. Retry, or inspect a smaller export.");
+          setPhase("error");
+          return;
+        }
+        // The browser tab may have been closed or the effect torn down; stop.
+        if (cancelledRef.current) return;
+
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const poll = await fetch(`/api/engine/inspect/${id}`, { cache: "no-store" });
+        const state = (await poll.json().catch(() => null)) as
+          | { status?: string; payload?: unknown; error?: string }
+          | null;
+
+        if (!poll.ok && poll.status === 404) {
+          setError(state?.error ?? "That inspection is no longer available. Drop the project again.");
+          setPhase("error");
+          return;
+        }
+        if (!state) continue;
+
+        if (state.status === "ok") {
+          setPhase("viewing");
+          const model = state.payload as InspectProject;
+          setProject(model);
+          setSourceName(file.name);
+          const firstProgram = model.pous.find((p) => p.pouType === "program");
+          setPouName(firstProgram?.name ?? null);
+          setPhase("idle");
+          return;
+        }
+        if (state.status === "error") {
+          setError(state.error ?? "The engine could not open that file.");
+          setPhase("error");
+          return;
+        }
+        // status === "pending": keep polling.
+      }
     } catch (error) {
       const seconds = Math.round((Date.now() - startedAt) / 1000);
       const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       setError(
         `The request to the server failed after about ${seconds}s (${detail}). This is your browser's connection to the server, not the conversion engine.`,
       );
-      setProject(null);
-    } finally {
-      setBusy(false);
+      setPhase("error");
     }
   }, []);
 
@@ -243,20 +372,26 @@ export function PtxViewer() {
     return () => clearTimeout(timer);
   }, [inspect]);
 
-  const pou = useMemo(
-    () => project?.pous.find((p) => p.name === pouName) ?? project?.pous[0] ?? null,
-    [project, pouName],
-  );
+  // Stop any poll loop still running when the viewer goes away.
+  useEffect(() => {
+    cancelledRef.current = false;
+    return () => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
+  const pou = useMemo(() => {
+    const programs = (project?.pous ?? []).filter((p) => p.pouType === "program");
+    return programs.find((p) => p.name === pouName) ?? programs[0] ?? null;
+  }, [project, pouName]);
 
   const filteredPous = useMemo(() => {
-    const list = project?.pous ?? [];
+    // The FBD browser shows programs only; function blocks are listed inside
+    // their calling program's sheets, not as standalone entries.
+    const list = (project?.pous ?? []).filter((p) => p.pouType === "program");
     const q = pouFilter.trim().toLowerCase();
     if (!q) return list;
-    return list.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        (POU_LABEL[p.pouType] ?? p.pouType).toLowerCase().includes(q),
-    );
+    return list.filter((p) => p.name.toLowerCase().includes(q));
   }, [project, pouFilter]);
 
   return (
@@ -266,12 +401,13 @@ export function PtxViewer() {
         <h1 className="mt-1 text-2xl font-bold text-nx-ink">TriStation project viewer</h1>
         <p className="mt-1 max-w-2xl text-sm text-nx-hint">
           Drop a <span className="font-mono">.pt2</span> or <span className="font-mono">.pt2x</span> container to browse its
-          programs, function blocks, interface variables and FBD sheets.
+          programs, interface variables and FBD sheets.
         </p>
       </div>
 
       <div
         onDragOver={(e) => {
+          if (busy) return;
           e.preventDefault();
           setDragging(true);
         }}
@@ -279,12 +415,13 @@ export function PtxViewer() {
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
+          if (busy) return;
           const file = e.dataTransfer.files[0];
           if (file) void inspect(file);
         }}
         className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed px-6 py-10 text-center transition-colors ${
-          dragging ? "border-nx-neon bg-nx-green-50" : "border-nx-line bg-nx-white"
-        }`}
+          dragging && !busy ? "border-nx-neon bg-nx-green-50" : "border-nx-line bg-nx-white"
+        } ${busy ? "pointer-events-none opacity-60" : ""}`}
       >
         <p className="text-sm font-semibold text-nx-ink">Drop a .pt2x here</p>
         <p className="text-xs text-nx-hint">or pick a file from disk</p>
@@ -299,14 +436,29 @@ export function PtxViewer() {
             e.target.value = "";
           }}
         />
-        <NxButton type="button" variant="primary" className="mt-3 text-xs" onClick={() => inputRef.current?.click()}>
+        <NxButton type="button" variant="primary" className="mt-3 text-xs" disabled={busy} onClick={() => inputRef.current?.click()}>
           Choose file…
         </NxButton>
       </div>
 
       {busy ? (
         <div className="border border-nx-line bg-nx-green-50 px-4 py-3 text-xs text-nx-ink">
-          Decompiling the project container…
+          <div className="flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2">
+              <span className="inline-block h-2 w-2 animate-pulse bg-nx-green-700" />
+              {phase === "uploading" ? `${PHASE_LABEL.uploading}… ${uploadPct}%` : PHASE_LABEL[phase]}
+            </span>
+            {phase === "uploading" ? (
+              <span className="tabular-nums font-semibold">{uploadPct}%</span>
+            ) : null}
+          </div>
+          <div className="mt-2 h-1.5 w-full bg-nx-line/50">
+            <div
+              className="h-full bg-nx-green-700 transition-[width] duration-200"
+              style={{ width: phase === "uploading" ? `${uploadPct}%` : "100%" }}
+            />
+          </div>
+          <p className="mt-2 text-[11px] text-nx-hint">Controls are disabled until this finishes.</p>
         </div>
       ) : null}
 

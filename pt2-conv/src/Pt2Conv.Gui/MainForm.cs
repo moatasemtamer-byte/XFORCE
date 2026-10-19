@@ -116,6 +116,7 @@ public sealed class MainForm : Form
             else if (mode == PathMode.SaveFile)
             {
                 using var d = new SaveFileDialog { Filter = filter, OverwritePrompt = true };
+                if (!string.IsNullOrWhiteSpace(tb.Text)) d.FileName = tb.Text;
                 if (d.ShowDialog(this) == DialogResult.OK) tb.Text = d.FileName;
             }
             else
@@ -202,6 +203,14 @@ public sealed class MainForm : Form
         return value.Trim();
     }
 
+    /// <summary>Best-effort default output path: the source with its extension swapped for .xml.
+    /// Returns "" when the text cannot yet be resolved to a path (e.g. still being typed).</summary>
+    private static string DefaultXmlPath(string source)
+    {
+        try { return Path.ChangeExtension(Path.GetFullPath(source.Trim()), ".xml"); }
+        catch { return ""; }
+    }
+
     // ---------------------------------------------------------------- Convert (primary)
 
     private Control BuildConvertPanel()
@@ -237,8 +246,8 @@ public sealed class MainForm : Form
             "base project, so it works for any XML. Optionally select a template .pt2x to preserve that project's exact " +
             "libraries and hardware configuration.");
 
-        var xml = AddPathRow(tlp, ref row, "PLCopen XML", XmlFilter, PathMode.OpenFile);
-        var outFolder = AddPathRow(tlp, ref row, "Output folder", "", PathMode.Folder);
+        var xml = AddPathRow(tlp, ref row, "Source XML (input)", XmlFilter, PathMode.OpenFile);
+        var outFolder = AddPathRow(tlp, ref row, "Output folder (created)", "", PathMode.Folder);
         var fileName = AddTextRow(tlp, ref row, "File name (opt)", "");
 
         var hint = NewDescription("File name: leave blank to use the XML's name with a .pt2x extension.");
@@ -271,7 +280,7 @@ public sealed class MainForm : Form
 
         AddRunRow(tlp, ref row, "Convert to .pt2x", () =>
         {
-            string xmlPath = Req(xml.Text, "PLCopen XML");
+            string xmlPath = Req(xml.Text, "source XML");
             string outDir = Req(outFolder.Text, "output folder");
             ValidatePlcopenXml(xmlPath);
             string name = fileName.Text.Trim();
@@ -326,14 +335,30 @@ public sealed class MainForm : Form
             "POU logic comes back as <FBD> graphs (blocks, wires, comments) or <ST> source, and the full tag " +
             "table is emitted with types, addresses and descriptions. " +
             "This runs entirely inside the tool - no TriStation installation and no licence are needed. " +
-            "The XML it writes can be edited, inspected, or re-converted on the other tab.");
+            "Pick your .pt2x and press Decompile: the XML is written next to it, named after it. " +
+            "Change 'Save XML as' only if you want it somewhere else.");
 
-        var pt2 = AddPathRow(tlp, ref row, "TriStation .pt2x", Pt2xFilter, PathMode.OpenFile);
-        var xmlOut = AddPathRow(tlp, ref row, "Output XML", XmlFilter, PathMode.SaveFile);
+        var pt2 = AddPathRow(tlp, ref row, "Source .pt2x (input)", Pt2xFilter, PathMode.OpenFile);
+        var xmlOut = AddPathRow(tlp, ref row, "Save XML as (output)", XmlFilter, PathMode.SaveFile);
+
+        // The output defaults to <source folder>\<source name>.xml as soon as a source is
+        // chosen, so nobody has to hunt for a save location. Browsing or typing in the
+        // output box takes over and stops the default from overwriting it.
+        bool syncing = false;
+        bool outTouched = false;
+        xmlOut.TextChanged += (_, _) => { if (!syncing) outTouched = true; };
+        pt2.TextChanged += (_, _) =>
+        {
+            if (outTouched || string.IsNullOrWhiteSpace(pt2.Text)) return;
+            string guess = DefaultXmlPath(pt2.Text);
+            if (guess.Length == 0) return;
+            try { syncing = true; xmlOut.Text = guess; }
+            finally { syncing = false; }
+        };
 
         AddRunRow(tlp, ref row, "Decompile .pt2x to XML", () =>
         {
-            string src = Req(pt2.Text, "TriStation .pt2x");
+            string src = Req(pt2.Text, "source .pt2x");
             string dst = Req(xmlOut.Text, "output XML path");
             if (!File.Exists(src))
                 throw new InvalidOperationException("File not found:\n" + src);

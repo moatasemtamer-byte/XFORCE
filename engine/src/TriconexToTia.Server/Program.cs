@@ -475,7 +475,7 @@ app.MapPost("/api/inspect", async (HttpRequest request) =>
     await using var stream = file.OpenReadStream();
     using var buffer = new MemoryStream();
     await stream.CopyToAsync(buffer, request.HttpContext.RequestAborted);
-    var bytes = buffer.ToArray();
+    var bytes = Pt2Importer.DecompressIfGzip(buffer.ToArray());
 
     if (!Pt2Importer.LooksLikePt2(bytes))
     {
