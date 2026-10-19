@@ -28,6 +28,22 @@ function PouDetail({ pou, projectName }: { pou: InspectPou; projectName: string 
     return sorted;
   }, [pou]);
 
+  const sheetCount = pou.sheets.length;
+
+  useEffect(() => {
+    if (sheetCount < 2) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      if (event.key === "ArrowLeft") setSheetIndex((i) => Math.max(0, i - 1));
+      else if (event.key === "ArrowRight") setSheetIndex((i) => Math.min(sheetCount - 1, i + 1));
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sheetCount]);
+
   return (
     <div className="space-y-4">
       <div>
@@ -87,26 +103,39 @@ function PouDetail({ pou, projectName }: { pou: InspectPou; projectName: string 
 
       {pou.sheets.length > 0 ? (
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">FBD sheets</p>
-            {pou.sheets.length > 1 ? (
-              <div className="flex flex-wrap gap-1">
-                {pou.sheets.map((s, i) => (
-                  <button
-                    key={s.number}
-                    type="button"
-                    onClick={() => setSheetIndex(i)}
-                    className={`border px-2 py-0.5 text-[10px] font-semibold transition-colors ${
-                      i === sheetIndex
-                        ? "border-nx-ink bg-nx-neon text-nx-ink"
-                        : "border-nx-line text-nx-hint hover:text-nx-ink"
-                    }`}
-                  >
-                    {s.number}
-                    {s.title ? ` · ${s.title}` : ""}
-                  </button>
-                ))}
+            {sheetCount > 1 ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSheetIndex((i) => Math.max(0, i - 1))}
+                  disabled={sheetIndex <= 0}
+                  aria-label="Previous sheet"
+                  title="Previous sheet (←)"
+                  className="flex h-7 w-7 items-center justify-center border border-nx-line text-base font-bold leading-none text-nx-ink transition-colors hover:bg-nx-green-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  ‹
+                </button>
+                <span className="min-w-[11rem] text-center text-xs">
+                  <span className="font-semibold text-nx-ink">
+                    Sheet {sheet.number} / {sheetCount}
+                  </span>
+                  {sheet.title ? <span className="ml-2 text-nx-hint">{sheet.title}</span> : null}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSheetIndex((i) => Math.min(sheetCount - 1, i + 1))}
+                  disabled={sheetIndex >= sheetCount - 1}
+                  aria-label="Next sheet"
+                  title="Next sheet (→)"
+                  className="flex h-7 w-7 items-center justify-center border border-nx-line text-base font-bold leading-none text-nx-ink transition-colors hover:bg-nx-green-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  ›
+                </button>
               </div>
+            ) : sheet.title ? (
+              <span className="text-xs text-nx-hint">{sheet.title}</span>
             ) : null}
           </div>
           <FbdSheet
@@ -323,7 +352,7 @@ export function PtxViewer() {
               </div>
 
               <div className="min-w-0">
-                {pou ? <PouDetail pou={pou} projectName={project.projectName} /> : null}
+                {pou ? <PouDetail key={pou.name} pou={pou} projectName={project.projectName} /> : null}
               </div>
             </div>
           ) : (
