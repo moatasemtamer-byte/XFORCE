@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { NxButton, NxPanel, NxPanelBody, NxPanelTitle, NxStat, nxInputClass } from "@/components/nx/primitives";
-import { FbdSheet, type InspectProject, type InspectPou } from "@/components/engine/fbd-sheet";
+import { FbdSheet, type InspectProject, type InspectPou, type SheetZoom } from "@/components/engine/fbd-sheet";
 
 // ---------------------------------------------------------------------------
 // POU detail: interface table, ST source, FBD sheets.
@@ -17,17 +17,19 @@ const POU_LABEL: Record<string, string> = {
 
 const SECTION_ORDER = ["input", "output", "inOut", "local"];
 
-function PouDetail({ pou, projectName }: { pou: InspectPou; projectName: string }) {
+function PouDetail({
+  pou,
+  projectName,
+  zoom,
+  onZoomChange,
+}: {
+  pou: InspectPou;
+  projectName: string;
+  zoom: SheetZoom;
+  onZoomChange: (zoom: SheetZoom) => void;
+}) {
   const [sheetIndex, setSheetIndex] = useState(0);
   const sheet = pou.sheets[Math.min(sheetIndex, Math.max(0, pou.sheets.length - 1))];
-
-  const vars = useMemo(() => {
-    const sorted = [...pou.vars].sort(
-      (a, b) => SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section) || a.name.localeCompare(b.name),
-    );
-    return sorted;
-  }, [pou]);
-
   const sheetCount = pou.sheets.length;
 
   useEffect(() => {
@@ -45,18 +47,80 @@ function PouDetail({ pou, projectName }: { pou: InspectPou; projectName: string 
   }, [sheetCount]);
 
   return (
-    <div className="space-y-4">
-      <div>
-        <p className="text-sm font-bold text-nx-ink">
-          {pou.name}
-          <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-nx-hint">
-            {POU_LABEL[pou.pouType] ?? pou.pouType}
-            {pou.returnType ? ` → ${pou.returnType}` : ""}
-          </span>
-        </p>
-        {pou.title ? <p className="mt-0.5 text-xs text-nx-hint">{pou.title}</p> : null}
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="text-sm font-bold text-nx-ink">{pou.name}</p>
+        <span className="text-xs font-semibold uppercase tracking-wide text-nx-hint">
+          {POU_LABEL[pou.pouType] ?? pou.pouType}
+          {pou.returnType ? ` → ${pou.returnType}` : ""}
+        </span>
+        {pou.title ? <span className="text-xs text-nx-hint">{pou.title}</span> : null}
+        {sheetCount > 1 ? (
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSheetIndex((i) => Math.max(0, i - 1))}
+              disabled={sheetIndex <= 0}
+              aria-label="Previous sheet"
+              title="Previous sheet (←)"
+              className="flex h-7 w-7 items-center justify-center border border-nx-line text-base font-bold leading-none text-nx-ink transition-colors hover:bg-nx-green-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ‹
+            </button>
+            <span className="min-w-[11rem] text-center text-xs">
+              <span className="font-semibold text-nx-ink">
+                Sheet {sheet.number} / {sheetCount}
+              </span>
+              {sheet.title ? <span className="ml-2 text-nx-hint">{sheet.title}</span> : null}
+            </span>
+            <button
+              type="button"
+              onClick={() => setSheetIndex((i) => Math.min(sheetCount - 1, i + 1))}
+              disabled={sheetIndex >= sheetCount - 1}
+              aria-label="Next sheet"
+              title="Next sheet (→)"
+              className="flex h-7 w-7 items-center justify-center border border-nx-line text-base font-bold leading-none text-nx-ink transition-colors hover:bg-nx-green-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ›
+            </button>
+          </div>
+        ) : sheet.title ? (
+          <span className="ml-auto text-xs text-nx-hint">{sheet.title}</span>
+        ) : null}
       </div>
 
+      {pou.sheets.length > 0 ? (
+        <FbdSheet
+          sheet={sheet}
+          drawing={pou.drawing}
+          pouName={pou.name}
+          pouTitle={pou.title}
+          projectName={projectName}
+          sheetCount={pou.sheets.length}
+          zoom={zoom}
+          onZoomChange={onZoomChange}
+        />
+      ) : (
+        <pre className="max-h-[70vh] overflow-auto border border-nx-line bg-nx-white p-3 text-[11px] leading-relaxed text-nx-body">
+          {pou.st ?? "This program has no FBD sheets."}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+// The interface variables, referenced globals and ST source of a POU. Rendered
+// in the side panel, categorised, so the FBD canvas keeps the full width above.
+function PouInterface({ pou }: { pou: InspectPou }) {
+  const vars = useMemo(() => {
+    const sorted = [...pou.vars].sort(
+      (a, b) => SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section) || a.name.localeCompare(b.name),
+    );
+    return sorted;
+  }, [pou]);
+
+  return (
+    <div className="space-y-4">
       {vars.length > 0 ? (
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">Interface ({vars.length})</p>
@@ -95,59 +159,14 @@ function PouDetail({ pou, projectName }: { pou: InspectPou; projectName: string 
       {pou.st ? (
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">Structured text</p>
-          <pre className="mt-1 max-h-[70vh] overflow-auto border border-nx-line bg-nx-white p-3 text-[11px] leading-relaxed text-nx-body">
+          <pre className="mt-1 max-h-[60vh] overflow-auto border border-nx-line bg-nx-white p-3 text-[11px] leading-relaxed text-nx-body">
             {pou.st}
           </pre>
         </div>
       ) : null}
 
-      {pou.sheets.length > 0 ? (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-nx-hint">FBD sheets</p>
-            {sheetCount > 1 ? (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSheetIndex((i) => Math.max(0, i - 1))}
-                  disabled={sheetIndex <= 0}
-                  aria-label="Previous sheet"
-                  title="Previous sheet (←)"
-                  className="flex h-7 w-7 items-center justify-center border border-nx-line text-base font-bold leading-none text-nx-ink transition-colors hover:bg-nx-green-50 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  ‹
-                </button>
-                <span className="min-w-[11rem] text-center text-xs">
-                  <span className="font-semibold text-nx-ink">
-                    Sheet {sheet.number} / {sheetCount}
-                  </span>
-                  {sheet.title ? <span className="ml-2 text-nx-hint">{sheet.title}</span> : null}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSheetIndex((i) => Math.min(sheetCount - 1, i + 1))}
-                  disabled={sheetIndex >= sheetCount - 1}
-                  aria-label="Next sheet"
-                  title="Next sheet (→)"
-                  className="flex h-7 w-7 items-center justify-center border border-nx-line text-base font-bold leading-none text-nx-ink transition-colors hover:bg-nx-green-50 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  ›
-                </button>
-              </div>
-            ) : sheet.title ? (
-              <span className="text-xs text-nx-hint">{sheet.title}</span>
-            ) : null}
-          </div>
-          <FbdSheet
-            key={`${pou.name}-${sheet.number}`}
-            sheet={sheet}
-            drawing={pou.drawing}
-            pouName={pou.name}
-            pouTitle={pou.title}
-            projectName={projectName}
-            sheetCount={pou.sheets.length}
-          />
-        </div>
+      {vars.length === 0 && !pou.st && pou.referencedGlobals.length === 0 ? (
+        <p className="text-xs text-nx-hint">No interface variables or source for this program.</p>
       ) : null}
     </div>
   );
@@ -168,11 +187,13 @@ export function PtxViewer() {
   const [dragging, setDragging] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
   const [pouFilter, setPouFilter] = useState("");
-  const [tab, setTab] = useState<"pous" | "tags">("pous");
+  const [tab, setTab] = useState<"interface" | "tags">("interface");
+  const [zoom, setZoom] = useState<SheetZoom>("fit");
 
   const inspect = useCallback(async (file: File) => {
     setBusy(true);
     setError(null);
+    const startedAt = Date.now();
     try {
       const body = new FormData();
       body.append("file", file, file.name);
@@ -187,8 +208,12 @@ export function PtxViewer() {
       setProject(model);
       setSourceName(file.name);
       setPouName(model.pous[0]?.name ?? null);
-    } catch {
-      setError("The engine could not be reached.");
+    } catch (error) {
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      setError(
+        `The request to the server failed after about ${seconds}s (${detail}). This is your browser's connection to the server, not the conversion engine.`,
+      );
       setProject(null);
     } finally {
       setBusy(false);
@@ -300,113 +325,129 @@ export function PtxViewer() {
             <NxStat label="Tags" value={String(project.tagCount)} />
           </div>
 
-          <div className="flex gap-4 border-b border-nx-line">
-            {(["pous", "tags"] as const).map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setTab(key)}
-                className={`-mb-px border-b-2 pb-2 text-xs font-semibold uppercase tracking-wide transition-colors ${
-                  tab === key ? "border-nx-neon text-nx-ink" : "border-transparent text-nx-hint hover:text-nx-ink"
-                }`}
-              >
-                {key === "pous" ? `Programs (${project.pous.length})` : `Tags (${project.tags.length})`}
-              </button>
-            ))}
-          </div>
+          <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
+            <div className="border border-nx-line bg-nx-white">
+              <div className="border-b border-nx-line p-2">
+                <input
+                  type="text"
+                  value={pouFilter}
+                  onChange={(e) => setPouFilter(e.target.value)}
+                  placeholder="Filter programs…"
+                  className={`${nxInputClass} w-full`}
+                />
+              </div>
+              <nav aria-label="Programs">
+                <ul className="max-h-[70vh] divide-y divide-nx-line overflow-y-auto">
+                  {filteredPous.map((p) => (
+                    <li key={p.name}>
+                      <button
+                        type="button"
+                        onClick={() => setPouName(p.name)}
+                        className={`w-full px-3 py-2 text-left transition-colors ${
+                          pou?.name === p.name ? "bg-nx-green-100" : "hover:bg-nx-green-50"
+                        }`}
+                      >
+                        <span className="block truncate text-xs font-semibold text-nx-ink">{p.name}</span>
+                        <span className="block truncate text-[10px] text-nx-hint">
+                          {POU_LABEL[p.pouType] ?? p.pouType}
+                          {p.sheets.length > 0 ? ` · FBD · ${p.sheets.length} sheet${p.sheets.length === 1 ? "" : "s"}` : ""}
+                          {p.st ? " · ST" : ""}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            </div>
 
-          {tab === "pous" ? (
-            <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
-              <div className="border border-nx-line bg-nx-white">
-                <div className="border-b border-nx-line p-2">
-                  <input
-                    type="text"
-                    value={pouFilter}
-                    onChange={(e) => setPouFilter(e.target.value)}
-                    placeholder="Filter programs…"
-                    className={`${nxInputClass} w-full`}
-                  />
+            <div className="min-w-0 space-y-4">
+              {pou ? (
+                <PouDetail
+                  key={pou.name}
+                  pou={pou}
+                  projectName={project.projectName}
+                  zoom={zoom}
+                  onZoomChange={setZoom}
+                />
+              ) : null}
+
+              <div className="border-t border-nx-line pt-3">
+                <div className="flex gap-4 border-b border-nx-line">
+                  {(["interface", "tags"] as const).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setTab(key)}
+                      className={`-mb-px border-b-2 pb-2 text-xs font-semibold uppercase tracking-wide transition-colors ${
+                        tab === key ? "border-nx-neon text-nx-ink" : "border-transparent text-nx-hint hover:text-nx-ink"
+                      }`}
+                    >
+                      {key === "interface" ? "Interface" : `Tags (${project.tags.length})`}
+                    </button>
+                  ))}
                 </div>
-                <nav aria-label="Programs">
-                  <ul className="max-h-[62vh] divide-y divide-nx-line overflow-y-auto">
-                    {filteredPous.map((p) => (
-                      <li key={p.name}>
-                        <button
-                          type="button"
-                          onClick={() => setPouName(p.name)}
-                          className={`w-full px-3 py-2 text-left transition-colors ${
-                            pou?.name === p.name ? "bg-nx-green-100" : "hover:bg-nx-green-50"
-                          }`}
-                        >
-                          <span className="block truncate text-xs font-semibold text-nx-ink">{p.name}</span>
-                          <span className="block truncate text-[10px] text-nx-hint">
-                            {POU_LABEL[p.pouType] ?? p.pouType}
-                            {p.sheets.length > 0 ? ` · FBD · ${p.sheets.length} sheet${p.sheets.length === 1 ? "" : "s"}` : ""}
-                            {p.st ? " · ST" : ""}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </nav>
-              </div>
 
-              <div className="min-w-0">
-                {pou ? <PouDetail key={pou.name} pou={pou} projectName={project.projectName} /> : null}
+                <div className="pt-3">
+                  {tab === "interface" ? (
+                    pou ? (
+                      <PouInterface key={pou.name} pou={pou} />
+                    ) : null
+                  ) : (
+                    <div className="space-y-3">
+                      <input
+                        type="text"
+                        value={tagFilter}
+                        onChange={(e) => setTagFilter(e.target.value)}
+                        placeholder="Filter tags…"
+                        className={`${nxInputClass} max-w-xs`}
+                      />
+                      <div className="overflow-x-auto border border-nx-line bg-nx-white">
+                        <table className="w-full border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-nx-line text-left text-[10px] uppercase tracking-wide text-nx-hint">
+                              <th className="px-3 py-1.5 font-semibold">Name</th>
+                              <th className="px-3 py-1.5 font-semibold">Type</th>
+                              <th className="px-3 py-1.5 font-semibold">Address</th>
+                              <th className="px-3 py-1.5 font-semibold">Description</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tagFilter.trim() ? (
+                              project.tags
+                                .filter((t) => {
+                                  const q = tagFilter.trim().toLowerCase();
+                                  return (
+                                    t.name.toLowerCase().includes(q) ||
+                                    t.type.toLowerCase().includes(q) ||
+                                    t.desc.toLowerCase().includes(q) ||
+                                    t.address.toLowerCase().includes(q)
+                                  );
+                                })
+                                .slice(0, 500)
+                                .map((t) => (
+                                  <tr key={t.name} className="border-b border-nx-line/50">
+                                    <td className="px-3 py-1.5 font-mono text-[11px] text-nx-ink">{t.name}</td>
+                                    <td className="px-3 py-1.5 text-nx-body">{t.type}</td>
+                                    <td className="px-3 py-1.5 font-mono text-[11px] text-nx-body">{t.address}</td>
+                                    <td className="px-3 py-1.5 text-nx-hint">{t.desc}</td>
+                                  </tr>
+                                ))
+                            ) : (
+                              <tr>
+                                <td colSpan={4} className="px-3 py-4 text-center text-xs text-nx-hint">
+                                  {project.tags.length} tags. Type to filter.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          ) : (
-            <div className="space-y-3">
-              <input
-                type="text"
-                value={tagFilter}
-                onChange={(e) => setTagFilter(e.target.value)}
-                placeholder="Filter tags…"
-                className={`${nxInputClass} max-w-xs`}
-              />
-              <div className="overflow-x-auto border border-nx-line bg-nx-white">
-                <table className="w-full border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-nx-line text-left text-[10px] uppercase tracking-wide text-nx-hint">
-                      <th className="px-3 py-1.5 font-semibold">Name</th>
-                      <th className="px-3 py-1.5 font-semibold">Type</th>
-                      <th className="px-3 py-1.5 font-semibold">Address</th>
-                      <th className="px-3 py-1.5 font-semibold">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tagFilter.trim() ? (
-                      project.tags
-                        .filter((t) => {
-                          const q = tagFilter.trim().toLowerCase();
-                          return (
-                            t.name.toLowerCase().includes(q) ||
-                            t.type.toLowerCase().includes(q) ||
-                            t.desc.toLowerCase().includes(q) ||
-                            t.address.toLowerCase().includes(q)
-                          );
-                        })
-                        .slice(0, 500)
-                        .map((t) => (
-                          <tr key={t.name} className="border-b border-nx-line/50">
-                            <td className="px-3 py-1.5 font-mono text-[11px] text-nx-ink">{t.name}</td>
-                            <td className="px-3 py-1.5 text-nx-body">{t.type}</td>
-                            <td className="px-3 py-1.5 font-mono text-[11px] text-nx-body">{t.address}</td>
-                            <td className="px-3 py-1.5 text-nx-hint">{t.desc}</td>
-                          </tr>
-                        ))
-                    ) : (
-                      <tr>
-                        <td colSpan={4} className="px-3 py-4 text-center text-xs text-nx-hint">
-                          {project.tags.length} tags. Type to filter.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          </div>
         </>
       ) : null}
 

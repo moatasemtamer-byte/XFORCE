@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -565,6 +566,11 @@ function Frame({ drawing }: { drawing: InspectDrawing }) {
 
 const ZOOMS = [0.5, 1, 1.5];
 
+// Zoom is controlled by the parent so the user's choice survives sheet and POU
+// changes (this component remounts on those). "fit" scales the sheet to the
+// scroller width and re-derives on resize.
+export type SheetZoom = number | "fit";
+
 export function FbdSheet({
   sheet,
   drawing,
@@ -572,6 +578,8 @@ export function FbdSheet({
   pouTitle,
   projectName,
   sheetCount,
+  zoom,
+  onZoomChange,
 }: {
   sheet: InspectSheet;
   drawing?: InspectDrawing;
@@ -579,18 +587,32 @@ export function FbdSheet({
   pouTitle: string;
   projectName: string;
   sheetCount: number;
+  zoom: SheetZoom;
+  onZoomChange: (zoom: SheetZoom) => void;
 }) {
   const size = sheetSize(drawing);
-  const [zoom, setZoom] = useState(1);
   const scroller = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const [fitZoom, setFitZoom] = useState(1);
 
-  const fit = useCallback(() => {
+  const measureFit = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
     const z = Math.min(1.5, Math.max(0.1, (el.clientWidth - 8) / size.w));
-    setZoom(Number(z.toFixed(3)));
+    setFitZoom(Number(z.toFixed(3)));
   }, [size.w]);
+
+  useLayoutEffect(() => {
+    measureFit();
+    const el = scroller.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measureFit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [measureFit]);
+
+  const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
+  const fit = useCallback(() => onZoomChange("fit"), [onZoomChange]);
 
   const onPointerDown = useCallback((e: ReactPointerEvent) => {
     const el = scroller.current;
@@ -638,16 +660,26 @@ export function FbdSheet({
     <div className="border border-nx-line bg-nx-white">
       <div className="flex flex-wrap items-center gap-2 border-b border-nx-line bg-nx-green-50 px-2 py-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-nx-hint">Zoom</span>
-        <button type="button" onClick={fit} className="border border-nx-line px-2 py-0.5 text-[10px] font-semibold text-nx-ink hover:bg-nx-white">
+        <button
+          type="button"
+          onClick={fit}
+          className={`border px-2 py-0.5 text-[10px] font-semibold ${
+            zoom === "fit"
+              ? "border-nx-ink bg-nx-neon text-nx-ink"
+              : "border-nx-line text-nx-hint hover:text-nx-ink hover:bg-nx-white"
+          }`}
+        >
           Fit
         </button>
         {ZOOMS.map((z) => (
           <button
             key={z}
             type="button"
-            onClick={() => setZoom(z)}
+            onClick={() => onZoomChange(z)}
             className={`border px-2 py-0.5 text-[10px] font-semibold ${
-              Math.abs(zoom - z) < 0.001 ? "border-nx-ink bg-nx-neon text-nx-ink" : "border-nx-line text-nx-hint hover:text-nx-ink"
+              typeof zoom === "number" && Math.abs(zoom - z) < 0.001
+                ? "border-nx-ink bg-nx-neon text-nx-ink"
+                : "border-nx-line text-nx-hint hover:text-nx-ink"
             }`}
           >
             {Math.round(z * 100)}%
@@ -667,8 +699,8 @@ export function FbdSheet({
         <svg
           role="img"
           aria-label={`FBD sheet ${sheet.number}`}
-          width={size.w * zoom}
-          height={size.h * zoom}
+          width={size.w * effectiveZoom}
+          height={size.h * effectiveZoom}
           viewBox={`0 0 ${size.w} ${size.h}`}
           style={{ display: "block" }}
         >
