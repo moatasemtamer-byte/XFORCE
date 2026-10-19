@@ -877,16 +877,10 @@ public sealed class FromPt2
         var list = vars.ToList();
         if (list.Count == 0)
         {
-            int sp = tagSpec.IndexOf(' ', StringComparison.Ordinal);
-            string tag = sp < 0 ? tagSpec : tagSpec.Substring(0, sp);
             sb.Append("          <").Append(tag).Append(" />\n");
             return;
         }
-        int s2 = tagSpec.IndexOf(' ', StringComparison.Ordinal);
-        if (s2 >= 0)
-            sb.Append("          <").Append(tagSpec).Append(">\n");
-        else
-            sb.Append("          <").Append(tagSpec).Append(">\n");
+        sb.Append("          <").Append(tag).Append(">\n");
         foreach (var v in list)
         {
             sb.Append("            <variable name=\"").Append(Esc(v.Name)).Append("\">\n");
@@ -895,9 +889,7 @@ public sealed class FromPt2
                 sb.Append("              <documentation><![CDATA[").Append(CData(v.Desc)).Append("]]></documentation>\n");
             sb.Append("            </variable>\n");
         }
-        int s3 = tagSpec.IndexOf(' ', StringComparison.Ordinal);
-        string closeTag = s3 < 0 ? tagSpec : tagSpec.Substring(0, s3);
-        sb.Append("          </").Append(closeTag).Append(">\n");
+        sb.Append("          </").Append(tag).Append(">\n");
     }
 
     private void EmitFbdBody(StringBuilder sb, Pt2Block b)
