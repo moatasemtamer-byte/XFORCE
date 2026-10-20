@@ -495,6 +495,39 @@ app.MapPost("/api/inspect", async (HttpRequest request) =>
     return Results.Text(inspected.Json!, "application/json");
 });
 
+// Renders a TriStation project (.pt2/.pt2x) to a printable PDF that mirrors the editor's
+// own FBD sheets (frame, title block, blocks, terminals, wires, comments). Pure managed
+// drawing -- no TriStation, licence or Windows dependency. Same bearer token as /convert.
+app.MapPost("/api/pdf", async (HttpRequest request) =>
+{
+    var (file, filename, form, error) = await ReadUploadAsync(request, authToken);
+    if (file is null) return error!;
+
+    await using var stream = file.OpenReadStream();
+    using var buffer = new MemoryStream();
+    await stream.CopyToAsync(buffer, request.HttpContext.RequestAborted);
+    var bytes = Pt2Importer.DecompressIfGzip(buffer.ToArray());
+
+    if (!Pt2Importer.LooksLikePt2(bytes))
+    {
+        return Results.Json(
+            new { error = $"'{filename}' is not a TriStation project container (.pt2/.pt2x)." },
+            statusCode: StatusCodes.Status415UnsupportedMediaType);
+    }
+
+    var projectName = form?["name"].FirstOrDefault();
+    var rendered = await Pt2xPdf.RenderAsync(bytes, filename!, projectName, request.HttpContext.RequestAborted);
+    if (!rendered.Success)
+    {
+        return Results.Json(
+            new { error = rendered.Error ?? "The project could not be rendered.", report = rendered.Report },
+            statusCode: StatusCodes.Status422UnprocessableEntity);
+    }
+
+    var pdfName = Path.GetFileNameWithoutExtension(filename);
+    return Results.File(rendered.Pdf!, "application/pdf", $"{pdfName}.pdf");
+});
+
 app.Run();
 
 static bool TryResolveDirs(HttpRequest request, out string output, out string status, out string? error)
@@ -618,18 +651,38 @@ static async Task<(byte[]? Xml, string FileName, string LadderReport, string Imp
     if (extension is ".pdf" or ".lpt" or ".txt")
     {
         reportStage?.Invoke("reading ladder");
-        await using var sourceStream = file.OpenReadStream();
+        await using var readStream = file.OpenReadStream();
+        using var rawBuffer = new MemoryStream();
+        await readStream.CopyToAsync(rawBuffer, cancellationToken);
+        var rawBytes = rawBuffer.ToArray();
+
+        byte[] sourceBytes = rawBytes;
+        string sourceName = filename;
+
+        if ((extension == ".lpt" || extension == ".txt") && TriconexToTia.Engine.Ladder.LptToPdf.HasTristationPageHeaders(rawBytes))
+        {
+            reportStage?.Invoke("converting lpt to pdf");
+            sourceBytes = TriconexToTia.Engine.Ladder.LptToPdf.ConvertToPdf(rawBytes);
+            sourceName = Path.GetFileNameWithoutExtension(filename) + ".pdf";
+        }
+        else if (extension == ".pdf")
+        {
+            sourceBytes = rawBytes;
+            sourceName = filename;
+        }
+
+        await using var sourceStream = new MemoryStream(sourceBytes);
         await using var dptStream = form.Files.GetFile("dpt")?.OpenReadStream();
         await using var templateStream = form.Files.GetFile("template")?.OpenReadStream();
-        var ladder = await LadderPipeline.BuildXmlAsync(sourceStream, filename, dptStream, templateStream, reportStage, cancellationToken);
+        var ladder = await LadderPipeline.BuildXmlAsync(sourceStream, sourceName, dptStream, templateStream, reportStage, cancellationToken);
         if (!ladder.Success)
         {
-            return (null, filename, string.Empty, string.Empty, Results.Json(
+            return (null, sourceName, string.Empty, string.Empty, Results.Json(
                 new { error = ladder.Error ?? "Ladder conversion failed.", report = ladder.Report },
                 statusCode: StatusCodes.Status422UnprocessableEntity));
         }
 
-        return (ladder.Xml!, Path.GetFileNameWithoutExtension(filename) + ".xml", ladder.Report, string.Empty, null);
+        return (ladder.Xml!, Path.GetFileNameWithoutExtension(sourceName) + ".xml", ladder.Report, string.Empty, null);
     }
 
     await using var stream = file.OpenReadStream();
