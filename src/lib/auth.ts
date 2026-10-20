@@ -84,7 +84,7 @@ export async function getCurrentPublicUser(): Promise<PublicUser | null> {
 export function audit(actorId: string | null, action: string, detail?: unknown): void {
   getDb()
     .prepare("INSERT INTO audit_log (id, actor_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(newId("aud"), actorId, detail === undefined ? null : JSON.stringify(detail), nowIso());
+    .run(newId("aud"), actorId, action, detail === undefined ? null : JSON.stringify(detail), nowIso());
 }
 
 /**
