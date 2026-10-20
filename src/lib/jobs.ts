@@ -58,6 +58,70 @@ export function getJobForUser(jobId: string, userId: string): DecodedJob | null 
   return row ? decodeJob(row) : null;
 }
 
+export function listJobsForAdmin(userId: string, limit = 200): DecodedJob[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?")
+    .all(userId, limit) as Job[];
+  return rows.map(decodeJob);
+}
+
+export function getJobForAdmin(jobId: string): DecodedJob | null {
+  const row = getDb().prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as Job | undefined;
+  return row ? decodeJob(row) : null;
+}
+
+export interface AdminUserSummary {
+  id: string;
+  email: string;
+  name: string;
+  company: string | null;
+  role: string;
+  plan: string;
+  created_at: string;
+  jobs: number;
+  completed: number;
+  failed: number;
+  bytes: number;
+  last_job_at: string | null;
+}
+
+/** Every account with its job rollups, for the admin console. */
+export function listUserSummaries(limit = 200): AdminUserSummary[] {
+  return getDb()
+    .prepare(
+      `SELECT users.id, users.email, users.name, users.company, users.role, users.plan, users.created_at,
+              (SELECT COUNT(*) FROM jobs WHERE jobs.user_id = users.id) AS jobs,
+              (SELECT COUNT(*) FROM jobs WHERE jobs.user_id = users.id AND status = 'completed') AS completed,
+              (SELECT COUNT(*) FROM jobs WHERE jobs.user_id = users.id AND status = 'failed') AS failed,
+              (SELECT COALESCE(SUM(source_size), 0) FROM jobs WHERE jobs.user_id = users.id) AS bytes,
+              (SELECT MAX(created_at) FROM jobs WHERE jobs.user_id = users.id) AS last_job_at
+       FROM users ORDER BY users.created_at DESC LIMIT ?`,
+    )
+    .all(limit) as AdminUserSummary[];
+}
+
+export interface AdminUserDetail extends AdminUserSummary {
+  passwordless: boolean;
+}
+
+export function getUserForAdmin(userId: string): AdminUserDetail | null {
+  const row = getDb()
+    .prepare(
+      `SELECT users.id, users.email, users.name, users.company, users.role, users.plan, users.created_at,
+              users.password_hash,
+              (SELECT COUNT(*) FROM jobs WHERE jobs.user_id = users.id) AS jobs,
+              (SELECT COUNT(*) FROM jobs WHERE jobs.user_id = users.id AND status = 'completed') AS completed,
+              (SELECT COUNT(*) FROM jobs WHERE jobs.user_id = users.id AND status = 'failed') AS failed,
+              (SELECT COALESCE(SUM(source_size), 0) FROM jobs WHERE jobs.user_id = users.id) AS bytes,
+              (SELECT MAX(created_at) FROM jobs WHERE jobs.user_id = users.id) AS last_job_at
+       FROM users WHERE users.id = ?`,
+    )
+    .get(userId) as (AdminUserSummary & { password_hash: string }) | undefined;
+  if (!row) return null;
+  const { password_hash, ...rest } = row;
+  return { ...rest, passwordless: password_hash === "passwordless" };
+}
+
 export function countJobs(userId: string): { total: number; completed: number; failed: number } {
   const row = getDb()
     .prepare(
