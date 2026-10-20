@@ -28,10 +28,10 @@ function NavLink({ item, active }: { item: Item; active: boolean }) {
     <Link
       href={item.href}
       className={cx(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
+        "flex items-center gap-3 border-l-[3px] px-3 py-2 text-sm transition-colors",
         active
-          ? "bg-ink-800 text-mist-100 shadow-[inset_2px_0_0_0_var(--color-signal-400)]"
-          : "text-mist-400 hover:bg-ink-850 hover:text-mist-200",
+          ? "border-nx-neon bg-nx-green-100 font-semibold text-nx-ink"
+          : "border-nx-line-strong text-nx-body hover:bg-nx-green-50 hover:text-nx-ink",
       )}
     >
       <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7">
@@ -49,16 +49,16 @@ export function DashboardSidebar({ isAdmin, plan }: { isAdmin: boolean; plan: st
     href === "/dashboard" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <aside className="hidden w-60 shrink-0 border-r border-ink-800 bg-ink-900/40 lg:flex lg:flex-col">
+    <aside className="hidden w-60 shrink-0 border-r border-nx-line bg-nx-white lg:flex lg:flex-col">
       <nav className="flex-1 space-y-1 p-4">
-        <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-400">Workspace</p>
+        <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-nx-hint">Workspace</p>
         {MAIN.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
         ))}
 
         {isAdmin ? (
           <>
-            <p className="px-3 pb-2 pt-6 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-400">
+            <p className="px-3 pb-2 pt-6 text-[10px] font-semibold uppercase tracking-[0.18em] text-nx-hint">
               Administration
             </p>
             {ADMIN.map((item) => (
@@ -68,13 +68,13 @@ export function DashboardSidebar({ isAdmin, plan }: { isAdmin: boolean; plan: st
         ) : null}
       </nav>
 
-      <div className="border-t border-ink-800 p-4">
-        <div className="rounded-lg border border-ink-700 bg-ink-850 p-3">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">Current plan</p>
-          <p className="mt-1 text-sm font-semibold capitalize text-signal-300">{plan}</p>
+      <div className="border-t border-nx-line p-4">
+        <div className="border border-nx-line bg-nx-paper p-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-nx-hint">Current plan</p>
+          <p className="mt-1 text-sm font-semibold capitalize text-nx-green-700">{plan}</p>
           <Link
             href="/dashboard/billing"
-            className="mt-2.5 block text-xs text-mist-400 underline-offset-4 hover:text-mist-100 hover:underline"
+            className="mt-2.5 block text-xs text-nx-body underline-offset-4 hover:text-nx-ink hover:underline"
           >
             Manage plan
           </Link>
@@ -89,7 +89,7 @@ export function MobileSidebarNav({ isAdmin }: { isAdmin: boolean }) {
   const items = isAdmin ? [...MAIN, ...ADMIN] : MAIN;
 
   return (
-    <div className="flex gap-1 overflow-x-auto border-b border-ink-800 px-4 py-2 lg:hidden">
+    <div className="flex gap-1 overflow-x-auto border-b border-nx-line px-4 py-2 lg:hidden">
       {items.map((item) => {
         const active =
           item.href === "/dashboard" ? pathname === item.href : pathname.startsWith(item.href);
@@ -98,10 +98,10 @@ export function MobileSidebarNav({ isAdmin }: { isAdmin: boolean }) {
             key={item.href}
             href={item.href}
             className={cx(
-              "shrink-0 rounded-full border px-3 py-1.5 text-xs transition-colors",
+              "shrink-0 border px-3 py-1.5 text-xs transition-colors",
               active
-                ? "border-signal-500/50 bg-signal-500/10 text-signal-300"
-                : "border-ink-700 text-mist-400",
+                ? "border-nx-green-700 bg-nx-green-50 font-semibold text-nx-ink"
+                : "border-nx-line-strong text-nx-hint",
             )}
           >
             {item.label}

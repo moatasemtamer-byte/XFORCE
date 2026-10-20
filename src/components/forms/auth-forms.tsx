@@ -13,7 +13,7 @@ export function LoginForm() {
   return (
     <form action={action} className="space-y-5" noValidate>
       {state.error ? (
-        <p role="alert" className="rounded-lg border border-bad-500/40 bg-bad-500/10 px-3.5 py-2.5 text-xs text-bad-500">
+        <p role="alert" className="border border-nx-fail-fg/40 bg-nx-fail-bg px-3.5 py-2.5 text-xs text-nx-fail-fg">
           {state.error}
         </p>
       ) : null}
@@ -42,11 +42,11 @@ export function LoginForm() {
         />
       </Field>
 
-      <label className="flex items-center gap-2.5 text-xs text-mist-400">
+      <label className="flex items-center gap-2.5 text-xs text-nx-body">
         <input
           type="checkbox"
           name="remember"
-          className="h-4 w-4 rounded border-ink-500 bg-ink-800 accent-signal-500"
+          className="h-4 w-4 rounded-none border-nx-line-strong bg-nx-white accent-nx-green-700"
         />
         Keep me signed in on this device
       </label>
@@ -55,9 +55,9 @@ export function LoginForm() {
         {pending ? "Signing in…" : "Sign in"}
       </Button>
 
-      <p className="text-center text-xs text-mist-500">
+      <p className="text-center text-xs text-nx-hint">
         No account yet?{" "}
-        <Link href="/register" className="text-signal-300 underline-offset-4 hover:underline">
+        <Link href="/register" className="font-semibold text-nx-green-700 underline-offset-4 hover:underline">
           Create one free
         </Link>
       </p>
@@ -71,7 +71,7 @@ export function RegisterForm() {
   return (
     <form action={action} className="space-y-5" noValidate>
       {state.error ? (
-        <p role="alert" className="rounded-lg border border-bad-500/40 bg-bad-500/10 px-3.5 py-2.5 text-xs text-bad-500">
+        <p role="alert" className="border border-nx-fail-fg/40 bg-nx-fail-bg px-3.5 py-2.5 text-xs text-nx-fail-fg">
           {state.error}
         </p>
       ) : null}
@@ -117,9 +117,9 @@ export function RegisterForm() {
         {pending ? "Creating account…" : "Create free account"}
       </Button>
 
-      <p className="text-center text-xs text-mist-500">
+      <p className="text-center text-xs text-nx-hint">
         Already registered?{" "}
-        <Link href="/login" className="text-signal-300 underline-offset-4 hover:underline">
+        <Link href="/login" className="font-semibold text-nx-green-700 underline-offset-4 hover:underline">
           Sign in
         </Link>
       </p>

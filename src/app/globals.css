@@ -576,6 +576,47 @@
       "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
     --color-ink-700: var(--color-nx-line);
     --color-mist-100: var(--color-nx-ink);
+
+    /* The SaaS dashboard and auth screens were built on the dark ink/mist/signal
+       palette. Re-pointing those tokens here lets every one of those pages adopt
+       the Nexus light surface without rewriting each className. Tokens not listed
+       keep their original value. */
+    --color-ink-950: var(--color-nx-white);
+    --color-ink-900: var(--color-nx-white);
+    --color-ink-850: var(--color-nx-paper);
+    --color-ink-800: var(--color-nx-line);
+    --color-ink-600: var(--color-nx-line-strong);
+    --color-ink-500: var(--color-nx-line-strong);
+    --color-ink-400: var(--color-nx-hint);
+    --color-mist-500: var(--color-nx-hint);
+    --color-mist-400: var(--color-nx-body);
+    --color-mist-300: var(--color-nx-body);
+    --color-mist-200: var(--color-nx-ink);
+    --color-signal-600: var(--color-nx-green-700);
+    --color-signal-500: var(--color-nx-green-700);
+    --color-signal-400: var(--color-nx-green-700);
+    --color-signal-300: var(--color-nx-green-700);
+    --color-signal-200: var(--color-nx-green-700);
+    --color-amberline-500: var(--color-nx-unv-fg);
+    --color-amberline-400: var(--color-nx-unv-fg);
+    --color-good-500: var(--color-nx-green-700);
+    --color-bad-500: var(--color-nx-fail-fg);
+  }
+
+  /* Nexus surfaces are square, flat and light. Flatten the dark-era structural
+     utilities when they appear inside a dashboard/auth screen. Marketing pages
+     that still use these classes outside `.nx-app` keep their original styling. */
+  .nx-app .panel,
+  .nx-app .panel-raised {
+    background-color: var(--color-nx-white);
+    background-image: none;
+    border: 1px solid var(--color-nx-line);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .nx-app .glow-signal {
+    box-shadow: none;
   }
 
   .nx-app :is(h1, h2, h3, h4, h5, h6) {

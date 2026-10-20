@@ -31,7 +31,7 @@ export default async function LoginPage({
       subtitle="Access your conversions, licenses and job history."
       notice={
         notice ? (
-          <p role="alert" className="rounded-lg border border-signal-500/40 bg-signal-500/10 px-3.5 py-2.5 text-xs text-signal-200">
+          <p role="alert" className="border border-nx-green-700/40 bg-nx-green-50 px-3.5 py-2.5 text-xs text-nx-green-700">
             {notice}
           </p>
         ) : undefined

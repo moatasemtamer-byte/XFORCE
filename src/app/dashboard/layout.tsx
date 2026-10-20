@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Logo } from "@/components/logo";
+import { NxSplash } from "@/components/nx/splash";
 import { DashboardSidebar, MobileSidebarNav } from "@/components/dashboard/sidebar";
 import { LogoutButton } from "@/components/dashboard/logout-button";
 import { getCurrentUser } from "@/lib/auth";
@@ -22,36 +23,38 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
   const engine = await engineStatus();
 
   return (
-    <div className="flex min-h-full flex-1 flex-col">
-      <header className="sticky top-0 z-40 border-b border-ink-800 bg-ink-950/90 backdrop-blur-md">
-        <div className="flex h-14 items-center justify-between gap-4 px-4 sm:px-6">
-          <Link href="/dashboard">
+    <div className="nx-app flex min-h-screen flex-col">
+      <NxSplash />
+
+      <header className="sticky top-0 z-40 border-b border-nx-line bg-nx-white">
+        <div className="flex items-center justify-between gap-4 px-4 py-2.5 sm:px-6 lg:px-10">
+          <Link href="/dashboard" aria-label="Home">
             <Logo />
           </Link>
 
           <div className="flex items-center gap-3">
             <span
-              className="hidden items-center gap-1.5 text-[11px] text-mist-500 sm:flex"
+              className="hidden items-center gap-1.5 text-[11px] text-nx-hint sm:flex"
               title={engine.detail}
             >
               <span
                 className={
-                  engine.ready ? "h-1.5 w-1.5 rounded-full bg-good-500" : "h-1.5 w-1.5 rounded-full bg-amberline-400"
+                  engine.ready ? "h-1.5 w-1.5 rounded-full bg-nx-green-700" : "h-1.5 w-1.5 rounded-full bg-nx-unv-fg"
                 }
               />
               {engine.ready ? "Engine online" : "Engine pending"}
             </span>
 
             <div className="text-right">
-              <p className="text-xs font-medium text-mist-200">{user.name}</p>
-              <p className="text-[11px] text-mist-500">{user.email}</p>
+              <p className="text-xs font-medium text-nx-ink">{user.name}</p>
+              <p className="text-[11px] text-nx-hint">{user.email}</p>
             </div>
 
             <span
               className={
                 user.role === "admin"
-                  ? "rounded-full border border-signal-500/40 bg-signal-500/10 px-2 py-0.5 text-[10px] font-medium text-signal-300"
-                  : "hidden rounded-full border border-ink-600 px-2 py-0.5 text-[10px] text-mist-500 sm:inline"
+                  ? "rounded-none border border-nx-fail-fg/40 bg-nx-fail-bg px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-nx-fail-fg"
+                  : "hidden rounded-none border border-nx-line-strong px-2 py-0.5 text-[10px] uppercase tracking-wide text-nx-hint sm:inline"
               }
             >
               {user.role}
@@ -66,7 +69,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
 
       <div className="flex flex-1">
         <DashboardSidebar isAdmin={user.role === "admin"} plan={plan.name} />
-        <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 sm:py-8">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-10">{children}</main>
       </div>
     </div>
   );

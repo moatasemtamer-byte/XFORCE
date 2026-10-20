@@ -129,7 +129,7 @@ export default async function AdminPage({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[520px] text-left text-xs">
               <thead>
-                <tr className="border-b border-ink-700 text-[11px] uppercase tracking-[0.12em] text-mist-500">
+                <tr className="border-b border-nx-line text-[11px] uppercase tracking-[0.12em] text-nx-hint">
                   <th className="px-5 py-3 font-medium">Account</th>
                   <th className="px-5 py-3 font-medium">Plan</th>
                   <th className="px-5 py-3 font-medium">Jobs</th>
@@ -138,18 +138,18 @@ export default async function AdminPage({
               </thead>
               <tbody>
                 {users.map((row) => (
-                  <tr key={row.id} className="border-b border-ink-800 last:border-0">
+                  <tr key={row.id} className="border-b border-nx-line last:border-0">
                     <td className="px-5 py-2.5">
-                      <p className="text-mist-200">{row.name}</p>
-                      <p className="text-[11px] text-mist-500">{row.email}</p>
+                      <p className="text-nx-ink">{row.name}</p>
+                      <p className="text-[11px] text-nx-hint">{row.email}</p>
                     </td>
                     <td className="px-5 py-2.5">
                       <Badge tone={row.role === "admin" ? "bad" : "neutral"}>
                         {row.role === "admin" ? "admin" : row.plan}
                       </Badge>
                     </td>
-                    <td className="px-5 py-2.5 tabular-nums text-mist-400">{row.jobs}</td>
-                    <td className="px-5 py-2.5 tabular-nums text-mist-500">
+                    <td className="px-5 py-2.5 tabular-nums text-nx-body">{row.jobs}</td>
+                    <td className="px-5 py-2.5 tabular-nums text-nx-hint">
                       {formatDateTime(row.created_at).slice(0, 10)}
                     </td>
                   </tr>
@@ -173,16 +173,16 @@ export default async function AdminPage({
         <Panel>
           <PanelTitle title="Inbound messages" description="Contact form and plan change requests." />
           {messages.length === 0 ? (
-            <p className="px-5 py-6 text-xs text-mist-500">No messages yet.</p>
+            <p className="px-5 py-6 text-xs text-nx-hint">No messages yet.</p>
           ) : (
-            <ul className="divide-y divide-ink-800">
+            <ul className="divide-y divide-nx-line">
               {messages.map((message) => (
                 <li key={message.id} className="px-5 py-3.5">
-                  <p className="text-xs text-mist-200">{message.subject ?? "No subject"}</p>
-                  <p className="mt-0.5 text-[11px] text-mist-500">
+                  <p className="text-xs text-nx-ink">{message.subject ?? "No subject"}</p>
+                  <p className="mt-0.5 text-[11px] text-nx-hint">
                     {message.name} · {message.email} · {formatDateTime(message.created_at)}
                   </p>
-                  <p className="mt-1.5 line-clamp-3 text-[11px] leading-relaxed text-mist-400">
+                  <p className="mt-1.5 line-clamp-3 text-[11px] leading-relaxed text-nx-body">
                     {message.body}
                   </p>
                 </li>
@@ -193,11 +193,11 @@ export default async function AdminPage({
 
         <Panel>
           <PanelTitle title="Audit log" description="Newest 25 recorded events." />
-          <ul className="divide-y divide-ink-800">
+          <ul className="divide-y divide-nx-line">
             {audit.map((entry) => (
               <li key={entry.id} className="flex items-start justify-between gap-3 px-5 py-2.5 text-[11px]">
-                <span className="font-mono text-mist-300">{entry.action}</span>
-                <span className="shrink-0 tabular-nums text-mist-500">
+                <span className="font-mono text-nx-body">{entry.action}</span>
+                <span className="shrink-0 tabular-nums text-nx-hint">
                   {formatDateTime(entry.created_at)}
                 </span>
               </li>
@@ -207,7 +207,7 @@ export default async function AdminPage({
       </div>
 
       <Panel className="p-5">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mist-500">Runtime</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-nx-hint">Runtime</p>
         <dl className="mt-4 grid gap-4 text-xs sm:grid-cols-3">
           {[
             ["Database", databasePath()],
@@ -215,8 +215,8 @@ export default async function AdminPage({
             ["Engine", engine.detail],
           ].map(([label, value]) => (
             <div key={label}>
-              <dt className="text-mist-500">{label}</dt>
-              <dd className="mt-1 break-all font-mono text-[11px] text-mist-300">{value}</dd>
+              <dt className="text-nx-hint">{label}</dt>
+              <dd className="mt-1 break-all font-mono text-[11px] text-nx-body">{value}</dd>
             </div>
           ))}
         </dl>
