@@ -8,6 +8,7 @@ import {
   countActiveLicenses,
   createLicense,
   effectivePlan,
+  isFeature,
   issueLicenseForUser,
   listLicenses,
   PLANS,
@@ -17,10 +18,18 @@ import {
   updateLicenseTerms,
 } from "@/lib/licensing";
 import { clean } from "@/lib/validate";
-import type { LicenseStatus, PlanId } from "@/lib/types";
+import type { LicenseFeature, LicenseStatus, PlanId } from "@/lib/types";
 
 function isPlan(value: string): value is PlanId {
   return (PLAN_ORDER as string[]).includes(value);
+}
+
+/** Read the ticked capability checkboxes from a license form. */
+function readFeatures(formData: FormData): LicenseFeature[] {
+  return formData
+    .getAll("features")
+    .map((value) => String(value))
+    .filter(isFeature);
 }
 
 function isStatus(value: string): value is LicenseStatus {
@@ -60,6 +69,7 @@ export async function issueLicenseAction(formData: FormData): Promise<void> {
     activationLimit: seats,
     expiresAt,
     notes,
+    features: readFeatures(formData),
   });
 
   audit(user.id, "license.issued", { id: license.id, plan, seats });
@@ -129,7 +139,14 @@ export async function adminIssueLicenseAction(formData: FormData): Promise<void>
   const expiresRaw = clean(formData.get("expiresAt"), 20);
   const expiresAt = expiresRaw ? new Date(expiresRaw).toISOString() : null;
 
-  const result = issueLicenseForUser({ ownerEmail, plan: planRaw, seats, expiresAt, notes });
+  const result = issueLicenseForUser({
+    ownerEmail,
+    plan: planRaw,
+    seats,
+    expiresAt,
+    notes,
+    features: readFeatures(formData),
+  });
 
   if (!result.ok) {
     redirect(`/dashboard/admin?error=${result.error === "user_not_found" ? "no_such_user" : "invalid_request"}`);
@@ -159,7 +176,12 @@ export async function updateLicenseTermsAction(formData: FormData): Promise<void
   if (ownerId === null) redirect(`${back}?error=not_found`);
   if (!canManage(user, ownerId)) redirect(`${back}?error=forbidden`);
 
-  const terms: { seats?: number; expiresAt?: string | null; notes?: string | null } = {};
+  const terms: {
+    seats?: number;
+    expiresAt?: string | null;
+    notes?: string | null;
+    features?: LicenseFeature[];
+  } = {};
 
   const seatsRaw = clean(formData.get("seats"), 6);
   if (seatsRaw) {
@@ -174,6 +196,12 @@ export async function updateLicenseTermsAction(formData: FormData): Promise<void
 
   if (formData.has("notes")) {
     terms.notes = clean(formData.get("notes"), 200) || null;
+  }
+
+  // Only forms that render the capability picker (the admin editor) send this,
+  // so seat/expiry edits elsewhere never clobber the stored features.
+  if (formData.has("featuresPresent")) {
+    terms.features = readFeatures(formData);
   }
 
   if (Object.keys(terms).length === 0) redirect(`${back}?error=invalid_request`);

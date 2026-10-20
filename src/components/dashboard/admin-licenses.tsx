@@ -5,8 +5,9 @@ import {
   updateLicenseTermsAction,
 } from "@/lib/actions/license-actions";
 import type { LicenseSeat, LicenseWithOwner } from "@/lib/licensing";
-import { PLANS, PLAN_ORDER } from "@/lib/licensing";
+import { FEATURE_ORDER, PLANS, PLAN_ORDER, parseFeatures } from "@/lib/licensing";
 import { Badge, Button, EmptyState, Field, Panel, PanelTitle, buttonClass, inputClass } from "@/components/ui";
+import { FeaturePicker } from "@/components/dashboard/feature-picker";
 import { formatDateTime } from "@/lib/util";
 import Link from "next/link";
 
@@ -66,7 +67,7 @@ export function AdminLicenseManager({
               />
             </Field>
 
-            <Field label="Plan" htmlFor="plan">
+            <Field label="Plan" htmlFor="plan" hint="Sets seats, quota and retention limits.">
               <select id="plan" name="plan" defaultValue="professional" className={inputClass}>
                 {PLAN_ORDER.map((id) => (
                   <option key={id} value={id}>
@@ -98,6 +99,8 @@ export function AdminLicenseManager({
           <Field label="Notes" htmlFor="notes" hint="Project, machine, contract…">
             <input id="notes" name="notes" className={inputClass} placeholder="Line 2 panel — contract 4471" />
           </Field>
+
+          <FeaturePicker selected={FEATURE_ORDER} idPrefix="issue" />
 
           <Button type="submit" className="w-full">
             Issue license
@@ -149,6 +152,27 @@ export function AdminLicenseManager({
                       <Badge tone="info">{PLANS[license.plan as keyof typeof PLANS]?.name ?? license.plan}</Badge>
                       <Badge tone={statusTone(license.status, Boolean(license.expired))}>{status}</Badge>
                     </div>
+                    <p className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {(() => {
+                        const granted = parseFeatures(license.features);
+                        if (granted.length === 0) {
+                          return <span className="text-[11px] text-bad-400">No capabilities granted</span>;
+                        }
+                        return (
+                          <>
+                            <span className="text-[11px] text-mist-500">Capabilities:</span>
+                            {granted.map((feature) => (
+                              <span
+                                key={feature}
+                                className="rounded border border-signal-400/30 bg-signal-400/10 px-1.5 py-0.5 font-mono text-[10px] text-signal-200"
+                              >
+                                {feature}
+                              </span>
+                            ))}
+                          </>
+                        );
+                      })()}
+                    </p>
                     <p className="mt-1.5 text-xs text-mist-400">
                       {license.owner_email ? (
                         <>
@@ -259,6 +283,10 @@ export function AdminLicenseManager({
                         />
                       </Field>
                     </div>
+                    <FeaturePicker
+                      selected={parseFeatures(license.features)}
+                      idPrefix={`lic-${license.id}`}
+                    />
                     <Button type="submit" variant="outline" size="sm">
                       Save terms
                     </Button>

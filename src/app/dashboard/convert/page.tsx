@@ -29,7 +29,7 @@ export default async function ConvertPage() {
             description="Files stay on the server and are removed automatically once your retention window closes."
           />
           <div className="p-5">
-            <ConvertForm maxUploadBytes={context.plan.maxUploadBytes} />
+            <ConvertForm maxUploadBytes={context.plan.maxUploadBytes} features={context.features} />
           </div>
         </Panel>
 

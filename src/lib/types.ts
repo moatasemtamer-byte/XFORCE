@@ -25,6 +25,22 @@ export interface PublicUser {
   created_at: string;
 }
 
+/**
+ * Named capabilities a license can grant. Access is decided entirely by this
+ * list — the plan is only a label and a set of numeric limits.
+ */
+export type LicenseFeature =
+  | "convert.xml"
+  | "convert.pt2x"
+  | "convert.tia"
+  | "viewer"
+  | "source.pdf"
+  | "source.listing"
+  | "artifacts.netlist"
+  | "artifacts.rungs_report"
+  | "artifacts.bom"
+  | "project.build";
+
 export interface License {
   id: string;
   /** null until someone claims a seat: an unassigned key belongs to nobody yet. */
@@ -35,6 +51,8 @@ export interface License {
   seats: number;
   activations: number;
   activation_limit: number;
+  /** JSON-encoded LicenseFeature[] granting what this key may do. */
+  features: string;
   notes: string | null;
   created_at: string;
   expires_at: string | null;

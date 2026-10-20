@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 import { isExpired, newId, nowIso } from "./util";
-import type { License, PlanId, PublicUser } from "./types";
+import type { License, LicenseFeature, PlanId, PublicUser } from "./types";
 
 export interface PlanDefinition {
   id: PlanId;
@@ -103,6 +103,67 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
 
 export const PLAN_ORDER: PlanId[] = ["free", "starter", "professional", "enterprise"];
 
+/**
+ * The full capability catalogue. Access to every gated action is decided by
+ * whether a license's `features` array contains the matching key — plans no
+ * longer grant anything beyond their numeric limits (quota, size, seats).
+ */
+export interface FeatureDefinition {
+  id: LicenseFeature;
+  label: string;
+  group: "Convert" | "Source files" | "Artifacts" | "Tools";
+  description: string;
+}
+
+export const FEATURES: FeatureDefinition[] = [
+  { id: "convert.xml", label: "Convert to XML", group: "Convert", description: "Produce TriStation XML output." },
+  { id: "convert.pt2x", label: "Convert to PT2X", group: "Convert", description: "Produce TriStation PT2X output." },
+  { id: "convert.tia", label: "Convert to TIA / AP", group: "Convert", description: "Produce a TIA Portal (AP) project archive." },
+  { id: "project.build", label: "Build full TIA project", group: "Convert", description: "Run the project build endpoint, not just a single file." },
+  { id: "viewer", label: "Project viewer", group: "Tools", description: "Open PT2X/AP files in the interactive viewer." },
+  { id: "source.pdf", label: "Accept PDF uploads", group: "Source files", description: "Allow ladder PDF inputs." },
+  { id: "source.listing", label: "Accept listing uploads", group: "Source files", description: "Allow text listing (LPT/LST/TXT) inputs." },
+  { id: "artifacts.netlist", label: "Include netlist", group: "Artifacts", description: "Emit the netlist artifact." },
+  { id: "artifacts.rungs_report", label: "Include rungs report", group: "Artifacts", description: "Emit the rungs report artifact." },
+  { id: "artifacts.bom", label: "Include BOM", group: "Artifacts", description: "Emit the bill-of-materials artifact." },
+];
+
+export const FEATURE_ORDER: LicenseFeature[] = FEATURES.map((feature) => feature.id);
+
+const FEATURE_IDS = new Set<string>(FEATURE_ORDER);
+
+/** Every feature except BOM, used to backfill licenses created before features existed. */
+export const ALL_FEATURES: LicenseFeature[] = [...FEATURE_ORDER];
+
+/** What a freshly claimed, unassigned key can do before an admin tunes it. */
+export const DEFAULT_FEATURES: LicenseFeature[] = ["viewer"];
+
+export function isFeature(value: string): value is LicenseFeature {
+  return FEATURE_IDS.has(value);
+}
+
+/** Parse the JSON column into a validated, ordered feature list. */
+export function parseFeatures(raw: string | null | undefined): LicenseFeature[] {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return FEATURE_ORDER.filter((id) => parsed.includes(id));
+}
+
+export function serializeFeatures(features: LicenseFeature[]): string {
+  return JSON.stringify(FEATURE_ORDER.filter((id) => features.includes(id)));
+}
+
+/** True when a license currently grants `feature`. */
+export function licenseHasFeature(license: License, feature: LicenseFeature): boolean {
+  return parseFeatures(license.features).includes(feature);
+}
+
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 export function generateLicenseKey(plan: PlanId): string {
@@ -129,6 +190,8 @@ export interface CreateLicenseInput {
   activationLimit?: number;
   expiresAt?: string | null;
   notes?: string | null;
+  /** Capabilities this key grants. Defaults to viewer-only when omitted. */
+  features?: LicenseFeature[];
 }
 
 export function createLicense(input: CreateLicenseInput): License {
@@ -136,10 +199,11 @@ export function createLicense(input: CreateLicenseInput): License {
   const plan = PLANS[input.plan];
   const id = newId("lic");
   const createdAt = nowIso();
+  const features = serializeFeatures(input.features ?? DEFAULT_FEATURES);
 
   const insert = db.prepare(
-    `INSERT INTO licenses (id, user_id, key, plan, status, seats, activations, activation_limit, notes, created_at, expires_at, last_used_at)
-     VALUES (?, ?, ?, ?, 'active', ?, 0, ?, ?, ?, ?, NULL)`,
+    `INSERT INTO licenses (id, user_id, key, plan, status, seats, activations, activation_limit, features, notes, created_at, expires_at, last_used_at)
+     VALUES (?, ?, ?, ?, 'active', ?, 0, ?, ?, ?, ?, ?, NULL)`,
   );
 
   let key = generateLicenseKey(input.plan);
@@ -154,6 +218,7 @@ export function createLicense(input: CreateLicenseInput): License {
     input.plan,
     input.seats ?? plan.seats,
     input.activationLimit ?? plan.seats,
+    features,
     input.notes ?? null,
     createdAt,
     input.expiresAt ?? null,
@@ -224,6 +289,8 @@ export interface IssueForUserInput {
   seats?: number;
   expiresAt?: string | null;
   notes?: string | null;
+  /** Capabilities to grant. Omitted means viewer-only. */
+  features?: LicenseFeature[];
 }
 
 export type IssueForUserResult =
@@ -258,6 +325,7 @@ export function issueLicenseForUser(input: IssueForUserInput): IssueForUserResul
     activationLimit: seats,
     expiresAt: input.expiresAt ?? null,
     notes: input.notes ?? null,
+    features: input.features,
   });
 
   return { ok: true, license };
@@ -267,9 +335,10 @@ export interface LicenseTerms {
   seats?: number;
   expiresAt?: string | null;
   notes?: string | null;
+  features?: LicenseFeature[];
 }
 
-/** Change the seat allowance, expiry or notes on an existing license. */
+/** Change the seat allowance, expiry, notes or capabilities on a license. */
 export function updateLicenseTerms(id: string, terms: LicenseTerms): boolean {
   const db = getDb();
   const license = db.prepare("SELECT * FROM licenses WHERE id = ?").get(id) as License | undefined;
@@ -291,6 +360,10 @@ export function updateLicenseTerms(id: string, terms: LicenseTerms): boolean {
     sets.push("notes = ?");
     values.push(terms.notes);
   }
+  if (terms.features !== undefined) {
+    sets.push("features = ?");
+    values.push(serializeFeatures(terms.features));
+  }
 
   if (sets.length > 0) {
     db.prepare(`UPDATE licenses SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
@@ -299,6 +372,7 @@ export function updateLicenseTerms(id: string, terms: LicenseTerms): boolean {
   const parts: string[] = [];
   if (terms.seats !== undefined) parts.push(`seats=${terms.seats}`);
   if (terms.expiresAt !== undefined) parts.push(`expires=${terms.expiresAt ?? "never"}`);
+  if (terms.features !== undefined) parts.push(`features=${terms.features.length}`);
   if (terms.notes !== undefined) parts.push("notes=updated");
   recordLicenseEvent(id, "terms_updated", parts.join(" ") || null);
 
@@ -495,4 +569,78 @@ export function monthlyUsage(userId: string): number {
     .prepare("SELECT COUNT(*) AS n FROM jobs WHERE user_id = ? AND created_at >= ?")
     .get(userId, since.toISOString()) as { n: number };
   return row.n;
+}
+
+/**
+ * Every capability an account currently holds: the union of the features on each
+ * active, unexpired license it owns or holds a seat on. Feature access is decided
+ * here and nowhere else — plans only carry numeric limits.
+ */
+export function grantedFeatures(userId: string): LicenseFeature[] {
+  const licenses = [...listLicenses(userId), ...listSeatedLicenses(userId)];
+  const granted = new Set<LicenseFeature>();
+  for (const license of licenses) {
+    if (license.status !== "active") continue;
+    if (isExpired(license.expires_at)) continue;
+    for (const feature of parseFeatures(license.features)) granted.add(feature);
+  }
+  return FEATURE_ORDER.filter((id) => granted.has(id));
+}
+
+/**
+ * Features granted by one specific key, used when a conversion is pinned to a
+ * particular license. Returns an empty list for unknown/inactive keys.
+ */
+export function grantedFeaturesForKey(rawKey: string): LicenseFeature[] {
+  const check = checkLicenseKey(rawKey);
+  if (!check.valid || !check.license) return [];
+  return parseFeatures(check.license.features);
+}
+
+/** True when the account holds `feature` on any active license. */
+export function userHasFeature(userId: string, feature: LicenseFeature): boolean {
+  return grantedFeatures(userId).includes(feature);
+}
+
+export interface FeatureGate {
+  allowed: boolean;
+  features: LicenseFeature[];
+  missing: LicenseFeature[];
+}
+
+/** Resolve whether an account may use a set of required capabilities. */
+export function checkFeatures(userId: string, required: LicenseFeature[]): FeatureGate {
+  const features = grantedFeatures(userId);
+  const missing = required.filter((feature) => !features.includes(feature));
+  return { allowed: missing.length === 0, features, missing };
+}
+
+export function featureLabel(feature: LicenseFeature): string {
+  return FEATURES.find((entry) => entry.id === feature)?.label ?? feature;
+}
+
+/** Human message shown when a capability is not granted. */
+export function featureDeniedMessage(missing: LicenseFeature[]): string {
+  const labels = missing.map(featureLabel);
+  const list =
+    labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  return `Your license does not include ${list}. Contact your administrator to enable it.`;
+}
+
+export type ConversionTarget = "xml" | "pt2x" | "tia";
+
+/** Map a requested output target to the capability it needs. */
+export function targetFeature(target: ConversionTarget): LicenseFeature {
+  if (target === "xml") return "convert.xml";
+  if (target === "pt2x") return "convert.pt2x";
+  return "convert.tia";
+}
+
+/** Map a source filename to the capability needed to upload it, if any. */
+export function sourceFeature(filename: string): LicenseFeature | null {
+  const lower = filename.toLowerCase();
+  const ext = lower.slice(lower.lastIndexOf("."));
+  if (ext === ".pdf") return "source.pdf";
+  if ([".txt", ".lpt", ".lst", ".log", ".csv"].includes(ext)) return "source.listing";
+  return null;
 }

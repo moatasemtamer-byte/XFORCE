@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { engineToken, engineUrl } from "@/lib/env";
 import { EngineTimeoutError, postEngine } from "@/lib/engine-client";
+import { requireEngineFeatures } from "@/lib/engine-guard";
+import { sourceFeature, targetFeature, type ConversionTarget } from "@/lib/licensing";
+import type { LicenseFeature } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Forwards a source upload to the engine's /convert endpoint and relays the
-// returned artifacts (TIA import package + report) back to the browser. Kept
-// separate from /api/jobs: this path is the evidence workbench and does not
-// touch licensing, quotas or the database.
+// returned artifacts (TIA import package + report) back to the browser. Gated by
+// licensing: the caller must be signed in and hold the source + target features.
 
 const MAX_BYTES = Number(process.env.MSW_MAX_UPLOAD_BYTES ?? 512 * 1024 * 1024);
 // Ladder conversions run the whole PDF/LPT -> equations -> BL -> XML chain in one request and
@@ -50,11 +52,20 @@ export async function POST(request: Request) {
     );
   }
 
+  const rawTarget = form.get("target");
+  const target: ConversionTarget =
+    rawTarget === "xml" || rawTarget === "pt2x" || rawTarget === "tia" ? rawTarget : "tia";
+  const required: LicenseFeature[] = [targetFeature(target)];
+  const srcFeature = sourceFeature(file.name);
+  if (srcFeature) required.push(srcFeature);
+
+  const gate = await requireEngineFeatures(required);
+  if (gate.response) return gate.response;
+
   const forwarded = new FormData();
   forwarded.set("file", file, file.name);
   forwarded.set("options", typeof form.get("options") === "string" ? (form.get("options") as string) : "{}");
-  const target = form.get("target");
-  if (typeof target === "string") forwarded.set("target", target);
+  if (typeof rawTarget === "string") forwarded.set("target", rawTarget);
   const notes = form.get("notes");
   if (typeof notes === "string") forwarded.set("notes", notes);
   // Lets the browser poll /api/engine/progress/{id} while this request is still running.

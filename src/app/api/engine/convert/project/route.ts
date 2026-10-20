@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { engineToken, engineUrl } from "@/lib/env";
 import { EngineTimeoutError, postEngine } from "@/lib/engine-client";
+import { requireEngineFeatures } from "@/lib/engine-guard";
+import { sourceFeature } from "@/lib/licensing";
+import type { LicenseFeature } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +50,13 @@ export async function POST(request: Request) {
       { status: 413 },
     );
   }
+
+  const required: LicenseFeature[] = ["project.build"];
+  const srcFeature = sourceFeature(file.name);
+  if (srcFeature) required.push(srcFeature);
+
+  const gate = await requireEngineFeatures(required);
+  if (gate.response) return gate.response;
 
   const forwarded = new FormData();
   forwarded.set("file", file, file.name);

@@ -1,5 +1,6 @@
 import { engineUrl } from "@/lib/env";
 import { startInspect } from "@/lib/inspect-jobs";
+import { requireEngineFeatures } from "@/lib/engine-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,9 @@ export const dynamic = "force-dynamic";
 // model. See lib/inspect-jobs for why the response is split this way.
 
 export async function POST(request: Request) {
+  const gate = await requireEngineFeatures(["viewer"]);
+  if (gate.response) return gate.response;
+
   const base = engineUrl();
   if (!base) {
     return Response.json(

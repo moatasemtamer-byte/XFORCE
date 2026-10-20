@@ -1,4 +1,5 @@
 import { getInspect } from "@/lib/inspect-jobs";
+import { requireEngineFeatures } from "@/lib/engine-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,6 +9,9 @@ export const dynamic = "force-dynamic";
 // job already finished and was swept, which the client treats as a failed job.
 
 export async function GET(_request: Request, context: RouteContext<"/api/engine/inspect/[id]">) {
+  const gate = await requireEngineFeatures(["viewer"]);
+  if (gate.response) return gate.response;
+
   const { id } = await context.params;
   const job = getInspect(id);
 

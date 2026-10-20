@@ -2,7 +2,17 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { getDashboardContext } from "@/lib/dashboard";
 import { createAndRunJob, QuotaError } from "@/lib/jobs";
-import { checkLicenseKey, claimSeat } from "@/lib/licensing";
+import {
+  checkLicenseKey,
+  claimSeat,
+  featureDeniedMessage,
+  grantedFeatures,
+  grantedFeaturesForKey,
+  sourceFeature,
+  targetFeature,
+  type ConversionTarget,
+} from "@/lib/licensing";
+import type { LicenseFeature } from "@/lib/types";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { DEFAULT_OPTIONS, type ConversionOptions } from "@/lib/converter";
 import { clean } from "@/lib/validate";
@@ -97,18 +107,38 @@ export async function POST(request: Request) {
   }
 
   const rawTarget = clean(form.get("target"), 10);
+  const target: ConversionTarget = rawTarget === "xml" || rawTarget === "pt2x" || rawTarget === "tia" ? rawTarget : "tia";
   const options: ConversionOptions = {
     ...DEFAULT_OPTIONS,
     targetFormat: clean(form.get("targetFormat"), 20) || DEFAULT_OPTIONS.targetFormat,
     // "tia" (the import package) is the default: it is what every job returned before the
     // target field existed, so omitting it keeps old clients working.
-    target: rawTarget === "xml" || rawTarget === "pt2x" || rawTarget === "tia" ? rawTarget : "tia",
+    target,
     includeNetlist: form.get("includeNetlist") === "on",
     includeBom: form.get("includeBom") === "on",
     includeRungsReport: form.get("includeRungsReport") === "on",
     sheetName: clean(form.get("sheetName"), 60) || null,
     notes: clean(form.get("notes"), 500) || null,
   };
+
+  // Capability gate. Features come from the specific key when one is supplied,
+  // otherwise from the union of the account's active licenses. Nothing here is
+  // reachable without the matching grant.
+  const available: LicenseFeature[] = rawKey
+    ? grantedFeaturesForKey(rawKey)
+    : grantedFeatures(user.id);
+
+  const required: LicenseFeature[] = [targetFeature(target)];
+  const srcFeature = sourceFeature(file.name);
+  if (srcFeature) required.push(srcFeature);
+  if (options.includeNetlist) required.push("artifacts.netlist");
+  if (options.includeBom) required.push("artifacts.bom");
+  if (options.includeRungsReport) required.push("artifacts.rungs_report");
+
+  const missing = required.filter((feature) => !available.includes(feature));
+  if (missing.length > 0) {
+    return NextResponse.json({ error: featureDeniedMessage(missing), code: "feature_denied" }, { status: 403 });
+  }
 
   try {
     const job = await createAndRunJob({

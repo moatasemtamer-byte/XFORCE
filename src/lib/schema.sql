@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS licenses (
   seats INTEGER NOT NULL DEFAULT 1,
   activations INTEGER NOT NULL DEFAULT 0,
   activation_limit INTEGER NOT NULL DEFAULT 1,
+  -- JSON LicenseFeature[] granting what the key may do. Plans only carry limits.
+  features TEXT NOT NULL DEFAULT '["viewer"]',
   notes TEXT,
   created_at TEXT NOT NULL,
   expires_at TEXT,

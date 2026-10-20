@@ -4,12 +4,36 @@ import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { Button, Field, cx, inputClass } from "@/components/ui";
 import { formatBytes } from "@/lib/util";
+import type { LicenseFeature } from "@/lib/types";
 
 // Keep in step with ALLOWED_EXTENSIONS in src/app/api/jobs/route.ts — every source
 // family the engine's PrepareSourceAsync can normalize to TriStation XML.
 const ACCEPT = ".pdf,.txt,.lpt,.lst,.log,.csv,.xml,.zip,.pt2,.pt2x,.ap16,.ap17,.ap18,.ap19,.ap20";
 
 type Target = "tia" | "pt2x" | "xml";
+
+// Client-safe mirrors of the server catalog in src/lib/licensing.ts, kept here so
+// this component never imports the licensing module (which pulls in better-sqlite3).
+const TARGET_FEATURE: Record<Target, LicenseFeature> = {
+  tia: "convert.tia",
+  pt2x: "convert.pt2x",
+  xml: "convert.xml",
+};
+
+const FEATURE_LABEL: Record<string, string> = {
+  "convert.xml": "Convert to XML",
+  "convert.pt2x": "Convert to PT2X",
+  "convert.tia": "Convert to TIA / AP",
+  "source.pdf": "Accept PDF uploads",
+  "source.listing": "Accept listing uploads",
+};
+
+function sourceFeatureFor(name: string): LicenseFeature | null {
+  const ext = name.toLowerCase().slice(name.toLowerCase().lastIndexOf("."));
+  if (ext === ".pdf") return "source.pdf";
+  if ([".txt", ".lpt", ".lst", ".log", ".csv"].includes(ext)) return "source.listing";
+  return null;
+}
 
 const TARGETS: Array<{ id: Target; label: string; detail: string }> = [
   {
@@ -39,18 +63,36 @@ function sourceFamily(name: string): string {
   return "Source file";
 }
 
-export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
+export function ConvertForm({
+  maxUploadBytes,
+  features,
+}: {
+  maxUploadBytes: number;
+  features: LicenseFeature[];
+}) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [target, setTarget] = useState<Target>("tia");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
+  const granted = useMemo(() => new Set(features), [features]);
+  const targetAllowed = (id: Target) => granted.has(TARGET_FEATURE[id]);
+  const firstAllowed = TARGETS.find((option) => targetAllowed(option.id))?.id ?? "tia";
+  const [target, setTarget] = useState<Target>(firstAllowed);
+
   const tooLarge = file !== null && file.size > maxUploadBytes;
   const family = useMemo(() => (file ? sourceFamily(file.name) : null), [file]);
+  const srcFeature = useMemo(() => (file ? sourceFeatureFor(file.name) : null), [file]);
+  const sourceBlocked = srcFeature !== null && !granted.has(srcFeature);
+  const targetBlocked = !targetAllowed(target);
+  const noneAvailable = TARGETS.every((option) => !targetAllowed(option.id));
+
+  function denialMessage(missing: LicenseFeature): string {
+    return `${FEATURE_LABEL[missing] ?? missing} is not included in your license. Ask your administrator to enable it.`;
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -62,6 +104,14 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
     }
     if (tooLarge) {
       setError(`That file is larger than the ${formatBytes(maxUploadBytes)} limit on your plan.`);
+      return;
+    }
+    if (sourceBlocked && srcFeature) {
+      setError(denialMessage(srcFeature));
+      return;
+    }
+    if (targetBlocked) {
+      setError(denialMessage(TARGET_FEATURE[target]));
       return;
     }
 
@@ -149,6 +199,7 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
               <p className="mt-1.5 text-[11px] text-mist-500">
                 {family} · {formatBytes(file.size)}
                 {tooLarge ? <span className="ml-2 text-bad-500">exceeds plan limit</span> : null}
+                {sourceBlocked ? <span className="ml-2 text-bad-400">source not in license</span> : null}
               </p>
               <button
                 type="button"
@@ -179,15 +230,18 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
         </legend>
         <div className="mt-3 grid gap-2.5">
           {TARGETS.map((option) => {
+            const allowed = targetAllowed(option.id);
             const selected = target === option.id;
             return (
               <label
                 key={option.id}
                 className={cx(
-                  "flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition-colors",
-                  selected
-                    ? "border-signal-500 bg-signal-500/10"
-                    : "border-ink-700 bg-ink-900/40 hover:border-ink-600",
+                  "flex items-start gap-3 rounded-lg border px-4 py-3 transition-colors",
+                  !allowed
+                    ? "cursor-not-allowed border-ink-800 bg-ink-900/20 opacity-60"
+                    : selected
+                      ? "cursor-pointer border-signal-500 bg-signal-500/10"
+                      : "cursor-pointer border-ink-700 bg-ink-900/40 hover:border-ink-600",
                 )}
               >
                 <input
@@ -195,19 +249,31 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
                   name="target"
                   value={option.id}
                   checked={selected}
+                  disabled={!allowed}
                   onChange={() => setTarget(option.id)}
                   className="mt-0.5 accent-signal-500"
                 />
                 <span>
                   <span className={cx("block text-xs font-semibold", selected ? "text-mist-100" : "text-mist-300")}>
                     {option.label}
+                    {!allowed ? (
+                      <span className="ml-2 font-mono text-[10px] text-bad-400">not in license</span>
+                    ) : null}
                   </span>
-                  <span className="mt-0.5 block text-[11px] text-mist-500">{option.detail}</span>
+                  <span className="mt-0.5 block text-[11px] text-mist-500">
+                    {allowed ? option.detail : `Ask your administrator to enable ${FEATURE_LABEL[TARGET_FEATURE[option.id]] ?? TARGET_FEATURE[option.id]}.`}
+                  </span>
                 </span>
               </label>
             );
           })}
         </div>
+        {noneAvailable ? (
+          <p className="mt-3 rounded-lg border border-bad-500/40 bg-bad-500/10 px-3.5 py-2.5 text-[11px] leading-relaxed text-bad-400">
+            Your license grants no conversion output. Contact your administrator to enable a target
+            format before converting.
+          </p>
+        ) : null}
       </fieldset>
 
       <div className="grid gap-5 sm:grid-cols-2">
@@ -241,9 +307,13 @@ export function ConvertForm({ maxUploadBytes }: { maxUploadBytes: number }) {
         </div>
       ) : null}
 
-      <Button type="submit" disabled={progress !== null || !file || tooLarge} className="w-full sm:w-auto">
-        {progress !== null ? "Working…" : "Convert"}
-      </Button>
+        <Button
+          type="submit"
+          disabled={progress !== null || !file || tooLarge || sourceBlocked || targetBlocked || noneAvailable}
+          className="w-full sm:w-auto"
+        >
+          {progress !== null ? "Working…" : "Convert"}
+        </Button>
     </form>
   );
 }

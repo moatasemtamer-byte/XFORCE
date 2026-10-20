@@ -3,11 +3,12 @@ import { getCurrentUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { PageTitle } from "@/components/dashboard/page-title";
 import { AdminLicenseManager } from "@/components/dashboard/admin-licenses";
+import { KeyRevealModal } from "@/components/dashboard/key-reveal-modal";
 import { Badge, Panel, PanelTitle, Stat } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/util";
 import { databasePath, storageDir } from "@/lib/env";
 import { engineStatus } from "@/lib/converter";
-import { listLicensesForAdmin, listSeats, type LicenseSeat } from "@/lib/licensing";
+import { listLicensesForAdmin, listSeats, PLANS, type LicenseSeat } from "@/lib/licensing";
 
 type UserRow = {
   id: string;
@@ -96,6 +97,9 @@ export default async function AdminPage({
       : params.released
         ? "Seat released and now available again."
         : null;
+
+  const issuedId = typeof params.issued === "string" ? params.issued : null;
+  const issuedLicense = issuedId ? allLicenses.find((license) => license.id === issuedId) ?? null : null;
   const error = params.error
     ? {
         no_such_user: "No account with that email. Ask the user to register first.",
@@ -107,6 +111,14 @@ export default async function AdminPage({
 
   return (
     <div className="space-y-8">
+      {issuedLicense ? (
+        <KeyRevealModal
+          keyValue={issuedLicense.key}
+          plan={PLANS[issuedLicense.plan as keyof typeof PLANS]?.name ?? issuedLicense.plan}
+          ownerLabel={issuedLicense.owner_email ?? null}
+          closeHref="/dashboard/admin"
+        />
+      ) : null}
       <PageTitle
         title="Administration"
         description="Accounts, licenses, inbound messages and the audit trail."

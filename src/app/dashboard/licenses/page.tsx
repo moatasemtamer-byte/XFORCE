@@ -9,8 +9,9 @@ import {
   updateLicenseTermsAction,
 } from "@/lib/actions/license-actions";
 import { PageTitle } from "@/components/dashboard/page-title";
+import { KeyRevealModal } from "@/components/dashboard/key-reveal-modal";
 import { Badge, Button, EmptyState, Field, Panel, PanelTitle, inputClass } from "@/components/ui";
-import { PLANS, PLAN_ORDER, listSeats } from "@/lib/licensing";
+import { PLANS, PLAN_ORDER, listSeats, parseFeatures } from "@/lib/licensing";
 import { formatDate, formatDateTime, isExpired } from "@/lib/util";
 import type { LicenseStatus } from "@/lib/types";
 
@@ -40,7 +41,7 @@ export default async function LicensesPage({ searchParams }: PageProps<"/dashboa
 
   const issued = issuedId
     ? ((getDb().prepare("SELECT * FROM licenses WHERE id = ?").get(issuedId) as
-        | { id: string; key: string }
+        | { id: string; key: string; plan: string; features: string }
         | undefined) ?? null)
     : null;
 
@@ -58,6 +59,14 @@ export default async function LicensesPage({ searchParams }: PageProps<"/dashboa
 
   return (
     <div className="space-y-8">
+      {issued ? (
+        <KeyRevealModal
+          keyValue={issued.key}
+          plan={PLANS[issued.plan as keyof typeof PLANS]?.name ?? issued.plan}
+          ownerLabel="your account"
+          closeHref="/dashboard/licenses"
+        />
+      ) : null}
       <PageTitle
         title="Licenses"
         description="Issue keys, control seats and expiry, and revoke access when a machine leaves the floor."
@@ -72,16 +81,6 @@ export default async function LicensesPage({ searchParams }: PageProps<"/dashboa
         <p role="alert" className="rounded-lg border border-bad-500/40 bg-bad-500/10 px-3.5 py-2.5 text-xs text-bad-500">
           {ERRORS[errorKey]}
         </p>
-      ) : null}
-
-      {issued ? (
-        <div className="rounded-[14px] border border-good-500/40 bg-good-500/10 p-5">
-          <p className="text-sm font-semibold text-good-500">License issued</p>
-          <p className="mt-2 break-all font-mono text-sm text-mist-100">{issued.key}</p>
-          <p className="mt-2 text-xs text-mist-500">
-            Copy it now — it is shown in full only here and in the list below.
-          </p>
-        </div>
       ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[1.6fr_1fr] lg:items-start">
@@ -114,6 +113,26 @@ export default async function LicensesPage({ searchParams }: PageProps<"/dashboa
                         {license.notes ? (
                           <p className="mt-1 text-[11px] text-mist-500">{license.notes}</p>
                         ) : null}
+                        <p className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          {(() => {
+                            const granted = parseFeatures(license.features);
+                            if (granted.length === 0) {
+                              return (
+                                <span className="text-[11px] text-bad-400">
+                                  No capabilities — contact your administrator
+                                </span>
+                              );
+                            }
+                            return granted.map((feature) => (
+                              <span
+                                key={feature}
+                                className="rounded border border-signal-400/30 bg-signal-400/10 px-1.5 py-0.5 font-mono text-[10px] text-signal-200"
+                              >
+                                {feature}
+                              </span>
+                            ));
+                          })()}
+                        </p>
                       </div>
                       <Badge tone={expired ? "neutral" : STATUS_TONE[license.status]}>
                         {expired ? "expired" : license.status}
@@ -266,6 +285,10 @@ export default async function LicensesPage({ searchParams }: PageProps<"/dashboa
               <Button type="submit" className="w-full">
                 Issue license key
               </Button>
+              <p className="text-[11px] leading-relaxed text-mist-500">
+                New keys start with viewer access only. Ask your administrator to enable conversion
+                capabilities.
+              </p>
             </form>
           </Panel>
 
