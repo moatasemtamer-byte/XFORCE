@@ -2,9 +2,12 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { getJobForUser } from "@/lib/jobs";
+import { userHasFeature } from "@/lib/licensing";
 import { PageTitle } from "@/components/dashboard/page-title";
 import { JobStatusBadge } from "@/components/dashboard/job-bits";
 import { JobAutoRefresh } from "@/components/dashboard/job-auto-refresh";
+import { ConvertPipeline, sourceKindForFile, type TargetKind } from "@/components/engine/convert-flow";
+import { ConvertStations } from "@/components/nx/convert-stations";
 import { Badge, ButtonLink, Panel, PanelTitle, Stat, cx } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/util";
 
@@ -14,6 +17,22 @@ const TARGET_LABELS: Record<string, string> = {
   xml: "TriStation XML",
   msw: "TIA package",
 };
+
+function targetKindOf(raw: string): TargetKind {
+  return raw === "pt2x" || raw === "xml" ? raw : "tia";
+}
+
+const SOURCE_NOUN: Record<string, string> = {
+  pdf: "PDF",
+  lpt: "listing",
+  xml: "XML",
+  pt2: "PT2X",
+  ap: "TIA",
+};
+
+function pt2xOutputIndex(outputs: { name: string }[]): number {
+  return outputs.findIndex((output) => /\.pt2x?$/i.test(output.name));
+}
 
 export default async function JobDetailPage({ params }: PageProps<"/dashboard/jobs/[id]">) {
   const user = await getCurrentUser();
@@ -26,6 +45,11 @@ export default async function JobDetailPage({ params }: PageProps<"/dashboard/jo
   const running = job.status === "processing" || job.status === "queued";
   const targetRaw = typeof job.options.target === "string" ? job.options.target : "tia";
   const targetLabel = TARGET_LABELS[targetRaw] ?? targetRaw;
+  const targetKind = targetKindOf(targetRaw);
+  const sourceKind = sourceKindForFile(job.source_name);
+  const sourceNoun = SOURCE_NOUN[sourceKind] ?? "source";
+  const canView = userHasFeature(user.id, "viewer");
+  const viewerIndex = job.status === "completed" ? pt2xOutputIndex(job.outputs) : -1;
 
   return (
     <div className="space-y-8">
@@ -80,7 +104,59 @@ export default async function JobDetailPage({ params }: PageProps<"/dashboard/jo
             {job.error}
           </p>
         ) : null}
+
+        {/* ---- Live conversion path ---- */}
+        {job.status !== "failed" ? (
+          <div className="mt-4 space-y-3 border-t border-ink-800 pt-4">
+            <ConvertPipeline
+              sourceKind={sourceKind}
+              target={targetKind}
+              status={running ? "busy" : job.status === "completed" ? "done" : "idle"}
+              sourceName={job.source_name}
+            />
+            <ConvertStations active={running} stage={job.status === "completed" ? "done" : null} />
+          </div>
+        ) : null}
       </Panel>
+
+      {/* ---- Success banner ---- */}
+      {job.status === "completed" ? (
+        <div className="rounded-xl border-2 border-signal-500/50 bg-signal-500/10 p-6">
+          <div className="flex items-start gap-4">
+            <span
+              className="grid h-12 w-12 shrink-0 place-items-center rounded-xl border-2 border-signal-500/60 bg-signal-500/20 text-signal-300"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                <path d="m5 13 4 4 10-11" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-base font-bold text-mist-100">
+                Your {sourceNoun} file has successfully converted to {targetLabel}.
+              </p>
+              <p className="mt-1 text-xs text-mist-400">
+                {job.outputs.length === 1 ? "1 file is ready" : `${job.outputs.length} files are ready`} to download below
+                {job.finished_at ? ` · finished ${formatDateTime(job.finished_at)}` : ""}.
+              </p>
+              {canView && viewerIndex >= 0 ? (
+                <div className="mt-4">
+                  <Link
+                    href={`/dashboard/viewer?job=${job.id}&index=${viewerIndex}`}
+                    className="inline-flex items-center gap-2 rounded-lg border border-signal-500/60 bg-signal-500/10 px-3.5 py-2 text-xs font-semibold text-signal-200 transition-colors hover:bg-signal-500/20"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" strokeLinecap="round" strokeLinejoin="round" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    Open in viewer
+                  </Link>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* ---- Outputs ---- */}
       {job.status === "completed" ? (

@@ -10,12 +10,27 @@ interface Item {
   icon: string;
 }
 
+// The viewer is a capability, not a role: it appears for anyone whose license
+// grants the "viewer" feature, and links to a page that opens a finished job's
+// PT2X output in the interactive project viewer.
+const VIEWER_ITEM: Item = {
+  href: "/dashboard/viewer",
+  label: "Viewer",
+  icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7zM12 15a3 3 0 100-6 3 3 0 000 6z",
+};
+
 const MAIN: Item[] = [
   { href: "/dashboard", label: "Overview", icon: "M4 13h6V4H4v9zm0 7h6v-4H4v4zm10 0h6v-9h-6v9zm0-16v4h6V4h-6z" },
   { href: "/dashboard/convert", label: "Convert", icon: "M12 5v14m0-14l-4 4m4-4l4 4M5 19h14" },
   { href: "/dashboard/jobs", label: "Jobs", icon: "M4 6h16M4 12h16M4 18h10" },
   { href: "/dashboard/settings", label: "Settings", icon: "M12 15a3 3 0 100-6 3 3 0 000 6z" },
 ];
+
+function mainItems(hasViewer: boolean): Item[] {
+  if (!hasViewer) return MAIN;
+  // Sits between Jobs and Settings so the tools group together.
+  return [MAIN[0], MAIN[1], MAIN[2], VIEWER_ITEM, MAIN[3]];
+}
 
 // Licenses and billing are admin-only: administrators issue keys and manage plans
 // on behalf of everyone else, so regular accounts never see these panels.
@@ -47,17 +62,27 @@ function NavLink({ item, active }: { item: Item; active: boolean }) {
   );
 }
 
-export function DashboardSidebar({ isAdmin, plan }: { isAdmin: boolean; plan: string }) {
+export function DashboardSidebar({
+  isAdmin,
+  plan,
+  hasViewer,
+}: {
+  isAdmin: boolean;
+  plan: string;
+  hasViewer: boolean;
+}) {
   const pathname = usePathname();
 
   const isActive = (href: string) =>
     href === "/dashboard" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 
+  const items = mainItems(hasViewer);
+
   return (
     <aside className="hidden w-60 shrink-0 border-r border-nx-line bg-nx-white lg:flex lg:flex-col">
       <nav className="flex-1 space-y-1 p-4">
         <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-nx-hint">Workspace</p>
-        {MAIN.map((item) => (
+        {items.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item.href)} />
         ))}
 
@@ -98,9 +123,10 @@ export function DashboardSidebar({ isAdmin, plan }: { isAdmin: boolean; plan: st
   );
 }
 
-export function MobileSidebarNav({ isAdmin }: { isAdmin: boolean }) {
+export function MobileSidebarNav({ isAdmin, hasViewer }: { isAdmin: boolean; hasViewer: boolean }) {
   const pathname = usePathname();
-  const items = isAdmin ? [...MAIN, ...ADMIN_MAIN, ...ADMIN] : MAIN;
+  const base = mainItems(hasViewer);
+  const items = isAdmin ? [...base, ...ADMIN_MAIN, ...ADMIN] : base;
 
   return (
     <div className="flex gap-1 overflow-x-auto border-b border-nx-line px-4 py-2 lg:hidden">

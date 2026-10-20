@@ -6,7 +6,7 @@ import { NxSplash } from "@/components/nx/splash";
 import { DashboardSidebar, MobileSidebarNav } from "@/components/dashboard/sidebar";
 import { LogoutButton } from "@/components/dashboard/logout-button";
 import { getCurrentUser } from "@/lib/auth";
-import { listLicenses, effectivePlan } from "@/lib/licensing";
+import { listLicenses, effectivePlan, grantedFeatures } from "@/lib/licensing";
 import { engineStatus } from "@/lib/converter";
 
 export const metadata: Metadata = {
@@ -20,6 +20,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
 
   const licenses = listLicenses(user.id);
   const plan = effectivePlan(user, licenses);
+  const hasViewer = grantedFeatures(user.id).includes("viewer");
   const engine = await engineStatus();
 
   return (
@@ -65,10 +66,10 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
         </div>
       </header>
 
-      <MobileSidebarNav isAdmin={user.role === "admin"} />
+      <MobileSidebarNav isAdmin={user.role === "admin"} hasViewer={hasViewer} />
 
       <div className="flex flex-1">
-        <DashboardSidebar isAdmin={user.role === "admin"} plan={plan.name} />
+        <DashboardSidebar isAdmin={user.role === "admin"} plan={plan.name} hasViewer={hasViewer} />
         <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-10">{children}</main>
       </div>
     </div>

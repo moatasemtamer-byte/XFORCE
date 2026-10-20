@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { Button, Field, cx, inputClass } from "@/components/ui";
+import { ConvertPipeline, sourceKindForFile } from "@/components/engine/convert-flow";
+import { ConvertStations } from "@/components/nx/convert-stations";
 import { formatBytes } from "@/lib/util";
 import type { LicenseFeature } from "@/lib/types";
 
@@ -294,16 +296,27 @@ export function ConvertForm({
       </div>
 
       {progress !== null ? (
-        <div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-ink-800">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-signal-600 to-signal-400 transition-[width]"
-              style={{ width: `${Math.max(5, progress)}%` }}
-            />
+        <div className="space-y-4 rounded-lg border border-ink-700 bg-ink-900/40 p-4">
+          <ConvertPipeline
+            sourceKind={file ? sourceKindForFile(file.name) : "unknown"}
+            target={target}
+            status={progress < 100 ? "busy" : "done"}
+            sourceName={file?.name}
+          />
+          <ConvertStations active={progress < 100} stage={progress < 100 ? "preparing" : "done"} />
+          <div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-ink-800">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-signal-600 to-signal-400 transition-[width]"
+                style={{ width: `${Math.max(5, progress)}%` }}
+              />
+            </div>
+            <p className="mt-2 text-[11px] text-mist-500">
+              {progress < 100
+                ? "Uploading and converting — the path lights up until the engine answers…"
+                : "Conversion finished, opening the result…"}
+            </p>
           </div>
-          <p className="mt-2 text-[11px] text-mist-500">
-            {progress < 100 ? "Uploading and converting…" : "Conversion finished, opening job…"}
-          </p>
         </div>
       ) : null}
 
