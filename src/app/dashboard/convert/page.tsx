@@ -72,8 +72,9 @@ export default async function ConvertPage() {
             </p>
             {context.licenses.length === 0 ? (
               <p className="mt-3 text-xs leading-relaxed text-mist-500">
-                You have no license keys yet. Conversions still run on your plan quota, but nothing is
-                recorded against a key.
+                {user.role === "admin"
+                  ? "You have no license keys yet. Conversions still run on your plan quota, but nothing is recorded against a key."
+                  : "No license key is linked to your account. Ask your administrator to assign one."}
               </p>
             ) : (
               <ul className="mt-3 space-y-2.5">

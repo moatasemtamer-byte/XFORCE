@@ -33,6 +33,8 @@ const ERRORS: Record<string, string> = {
 export default async function LicensesPage({ searchParams }: PageProps<"/dashboard/licenses">) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  // Licensing is an admin surface: administrators issue keys on behalf of everyone.
+  if (user.role !== "admin") redirect("/dashboard");
 
   const context = await getDashboardContext(user);
   const query = await searchParams;

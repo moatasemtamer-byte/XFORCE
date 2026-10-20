@@ -8,6 +8,7 @@ import { hashPassword, passwordIssues, verifyPassword } from "@/lib/password";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { isEmail } from "@/lib/validate";
 import { newId, nowIso } from "@/lib/util";
+import { checkLicenseKey, claimSeat, normalizeKey } from "@/lib/licensing";
 import type { User } from "@/lib/types";
 
 export interface AuthFormState {
@@ -32,6 +33,7 @@ export async function registerAction(
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const company = String(formData.get("company") ?? "").trim();
   const password = String(formData.get("password") ?? "");
+  const licenseKey = normalizeKey(String(formData.get("licenseKey") ?? ""));
 
   const meta = await requestMeta();
   const limit = rateLimit(clientKey(["register", meta.ip]), 5, 15 * 60_000);
@@ -45,7 +47,31 @@ export async function registerAction(
   const issues = passwordIssues(password);
   if (issues.length > 0) fieldErrors.password = `Password ${issues.join(", ")}.`;
 
+  // Registration is gated by licensing: an admin issues a key with a fixed number
+  // of seats, and each new account consumes one. No key, an unknown key, or a key
+  // with no free seats means the account cannot be created.
+  if (!licenseKey) fieldErrors.licenseKey = "Enter the license key issued to you by your administrator.";
   if (Object.keys(fieldErrors).length > 0) return { fieldErrors };
+
+  const check = checkLicenseKey(licenseKey);
+  if (!check.valid || !check.license) {
+    const reason =
+      check.reason === "suspended"
+        ? "That license key is suspended. Contact your administrator."
+        : check.reason === "revoked"
+          ? "That license key has been revoked."
+          : check.reason === "expired"
+            ? "That license key has expired. Contact your administrator."
+            : "That license key was not recognised. Check it with your administrator.";
+    return { fieldErrors: { licenseKey: reason } };
+  }
+  if ((check.seatsRemaining ?? 0) <= 0) {
+    return {
+      fieldErrors: {
+        licenseKey: "That license key has no free seats left. Ask your administrator to add seats.",
+      },
+    };
+  }
 
   const db = getDb();
   const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
@@ -54,7 +80,7 @@ export async function registerAction(
   const id = newId("usr");
   db.prepare(
     `INSERT INTO users (id, email, name, company, password_hash, role, plan, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'free', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     email,
@@ -62,12 +88,27 @@ export async function registerAction(
     company || null,
     hashPassword(password),
     roleForEmail(email),
+    check.license.plan,
     nowIso(),
     nowIso(),
   );
 
-  await createSession(id, { remember: formData.get("remember") === "on", ...meta });
-  audit(id, "user.registered", { email });
+  // Take one seat for the new account, then bind the key to it if the admin
+  // minted it unassigned. Both are best-effort under the seat check above.
+  const claimed = claimSeat(check.license.id, email, "account", id);
+  if (!claimed.ok) {
+    // Seat filled up between the check and the claim (concurrent sign-up). Undo.
+    db.prepare("DELETE FROM users WHERE id = ?").run(id);
+    return {
+      fieldErrors: {
+        licenseKey: "That license key filled up just now. Ask your administrator to add seats.",
+      },
+    };
+  }
+  db.prepare("UPDATE licenses SET user_id = ? WHERE id = ? AND user_id IS NULL").run(id, check.license.id);
+
+  await createSession(id, { remember: false, ...meta });
+  audit(id, "user.registered", { email, license: check.license.id });
 
   redirect("/dashboard");
 }

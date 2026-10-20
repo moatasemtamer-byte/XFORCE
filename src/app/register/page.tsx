@@ -7,7 +7,7 @@ import { getCurrentPublicUser } from "@/lib/auth";
 
 export const metadata: Metadata = {
   title: "Create account",
-  description: "Start converting ladder diagrams to MSW with five free conversions every month.",
+  description: "Create your XforceMsw account using the license key issued by your administrator.",
 };
 
 export default async function RegisterPage() {
@@ -16,7 +16,7 @@ export default async function RegisterPage() {
   return (
     <AuthShell
       title="Create your account"
-      subtitle="Free forever tier: 5 conversions per month, no card required."
+      subtitle="Enter the license key your administrator issued. Each key allows a set number of accounts."
       footer={
         <Link href="/">← Back to xforcemsw.com</Link>
       }

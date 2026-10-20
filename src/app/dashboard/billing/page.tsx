@@ -11,6 +11,8 @@ import { formatBytes, formatDate } from "@/lib/util";
 export default async function BillingPage({ searchParams }: PageProps<"/dashboard/billing">) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  // Billing is an admin surface now that accounts are created via admin-issued keys.
+  if (user.role !== "admin") redirect("/dashboard");
 
   const context = await getDashboardContext(user);
   const query = await searchParams;

@@ -229,11 +229,13 @@ export default async function DashboardPage() {
                   : ""}
               </p>
             ) : null}
-            <div className="mt-5">
-              <ButtonLink href="/dashboard/billing" variant="outline" size="sm" className="w-full">
-                Compare plans
-              </ButtonLink>
-            </div>
+            {user.role === "admin" ? (
+              <div className="mt-5">
+                <ButtonLink href="/dashboard/billing" variant="outline" size="sm" className="w-full">
+                  Compare plans
+                </ButtonLink>
+              </div>
+            ) : null}
           </Panel>
 
           <Panel className="p-5">
@@ -270,11 +272,13 @@ export default async function DashboardPage() {
                 ))}
               </div>
             )}
-            <div className="mt-4">
-              <ButtonLink href="/dashboard/licenses" variant="outline" size="sm" className="w-full">
-                Manage licenses
-              </ButtonLink>
-            </div>
+            {user.role === "admin" ? (
+              <div className="mt-4">
+                <ButtonLink href="/dashboard/licenses" variant="outline" size="sm" className="w-full">
+                  Manage licenses
+                </ButtonLink>
+              </div>
+            ) : null}
           </Panel>
         </div>
       </div>

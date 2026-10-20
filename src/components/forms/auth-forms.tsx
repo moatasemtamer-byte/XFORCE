@@ -58,7 +58,7 @@ export function LoginForm() {
       <p className="text-center text-xs text-nx-hint">
         No account yet?{" "}
         <Link href="/register" className="font-semibold text-nx-green-700 underline-offset-4 hover:underline">
-          Create one free
+          Create one with a license key
         </Link>
       </p>
     </form>
@@ -94,6 +94,23 @@ export function RegisterForm() {
 
       <Field label="Company" htmlFor="company" hint="Optional. Shown on invoices and in job history.">
         <input id="company" name="company" autoComplete="organization" className={inputClass} placeholder="Controls Dept." />
+      </Field>
+
+      <Field
+        label="License key"
+        htmlFor="licenseKey"
+        error={state.fieldErrors?.licenseKey}
+        hint="Required. Your administrator issues this key; each key allows a set number of accounts."
+      >
+        <input
+          id="licenseKey"
+          name="licenseKey"
+          required
+          className={inputClass}
+          placeholder="XMSW-STD-XXXXX-XXXXX-XXXXX-XXXXX"
+          autoComplete="off"
+          spellCheck={false}
+        />
       </Field>
 
       <Field
