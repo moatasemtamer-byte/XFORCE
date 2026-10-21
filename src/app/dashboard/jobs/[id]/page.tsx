@@ -6,7 +6,8 @@ import { userHasFeature } from "@/lib/licensing";
 import { PageTitle } from "@/components/dashboard/page-title";
 import { JobStatusBadge } from "@/components/dashboard/job-bits";
 import { JobAutoRefresh } from "@/components/dashboard/job-auto-refresh";
-import { ConvertPipeline, sourceKindForFile, type TargetKind } from "@/components/engine/convert-flow";
+import { ConvertPipeline } from "@/components/engine/convert-flow";
+import { sourceKindForFile, type TargetKind } from "@/lib/convert-flow";
 import { ConvertStations } from "@/components/nx/convert-stations";
 import { Badge, ButtonLink, Panel, PanelTitle, Stat, cx } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/util";
@@ -140,7 +141,7 @@ export default async function JobDetailPage({ params }: PageProps<"/dashboard/jo
                 {job.finished_at ? ` · finished ${formatDateTime(job.finished_at)}` : ""}.
               </p>
               {canView && viewerIndex >= 0 ? (
-                <div className="mt-4">
+                <div className="mt-4 flex flex-wrap items-center gap-2">
                   <Link
                     href={`/dashboard/viewer?job=${job.id}&index=${viewerIndex}`}
                     className="inline-flex items-center gap-2 rounded-lg border border-signal-500/60 bg-signal-500/10 px-3.5 py-2 text-xs font-semibold text-signal-200 transition-colors hover:bg-signal-500/20"
@@ -151,6 +152,16 @@ export default async function JobDetailPage({ params }: PageProps<"/dashboard/jo
                     </svg>
                     Open in viewer
                   </Link>
+                  <a
+                    href={`/api/jobs/${job.id}/output/${viewerIndex}/pdf`}
+                    className="inline-flex items-center gap-2 rounded-lg border border-ink-600 px-3.5 py-2 text-xs font-semibold text-mist-200 transition-colors hover:border-signal-500/60 hover:text-mist-100"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M12 4v12m0 0l-4-4m4 4l4-4" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M4 18v1a2 2 0 002 2h12a2 2 0 002-2v-1" strokeLinecap="round" />
+                    </svg>
+                    Download as PDF
+                  </a>
                 </div>
               ) : null}
             </div>
