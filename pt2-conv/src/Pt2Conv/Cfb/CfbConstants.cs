@@ -5,6 +5,8 @@ public static class CfbConstants
     public const int HeaderSize = 512;
     public const int SectorShift = 9;
     public const int SectorSize = 1 << SectorShift;          // 512
+    public const int V4SectorShift = 12;
+    public const int V4SectorSize = 1 << V4SectorShift;      // 4096
     public const int MiniSectorShift = 6;
     public const int MiniSectorSize = 1 << MiniSectorShift;  // 64
     public const int MiniStreamCutoff = 4096;

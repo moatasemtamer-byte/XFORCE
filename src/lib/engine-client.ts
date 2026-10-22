@@ -16,6 +16,15 @@ export interface EngineResponse {
   raw: string;
 }
 
+export interface EngineBinaryResponse {
+  ok: boolean;
+  status: number;
+  contentType: string | null;
+  body: Buffer;
+  /** Parsed JSON error body when the engine failed; null on success or unparseable. */
+  json: unknown;
+}
+
 export class EngineTimeoutError extends Error {
   constructor(message: string) {
     super(message);
@@ -122,6 +131,88 @@ export async function postEngineRaw(
       reject(error);
     });
 
+    source.on("error", (error) => {
+      clearTimeout(deadline);
+      request.destroy();
+      reject(error);
+    });
+    source.pipe(request);
+  });
+}
+
+/**
+ * Like {@link postEngine}, but keeps the response body as raw bytes so a binary
+ * payload (e.g. the PDF from /api/pdf) survives intact. On failure the body is
+ * still parsed as JSON so the caller can relay the engine's error message.
+ */
+export async function postEngineBytes(
+  endpoint: string,
+  body: Uint8Array | ReadableStream<Uint8Array> | Readable,
+  contentType: string,
+  options: { timeoutMs: number; headers?: Record<string, string> },
+): Promise<EngineBinaryResponse> {
+  const url = new URL(endpoint);
+  const transport = url.protocol === "https:" ? https : http;
+
+  const source =
+    body instanceof Readable
+      ? body
+      : body instanceof Uint8Array
+        ? Readable.from(body)
+        : Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        path: `${url.pathname}${url.search}`,
+        method: "POST",
+        headers: { ...options.headers, "content-type": contentType },
+      },
+      (response) => {
+        const parts: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => parts.push(chunk));
+        response.on("end", () => {
+          clearTimeout(deadline);
+          const status = response.statusCode ?? 500;
+          const ok = status >= 200 && status < 300;
+          const buffer = Buffer.concat(parts);
+          let json: unknown = null;
+          if (!ok) {
+            try {
+              json = buffer.length ? JSON.parse(buffer.toString("utf8")) : null;
+            } catch {
+              json = null;
+            }
+          }
+          resolve({
+            ok,
+            status,
+            contentType: (response.headers["content-type"] as string | undefined) ?? null,
+            body: buffer,
+            json,
+          });
+        });
+        response.on("error", (error) => {
+          clearTimeout(deadline);
+          reject(error);
+        });
+      },
+    );
+
+    request.setTimeout(0);
+
+    const deadline = setTimeout(() => {
+      request.destroy();
+      reject(new EngineTimeoutError("the engine did not finish before the deadline"));
+    }, options.timeoutMs);
+
+    request.on("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
     source.on("error", (error) => {
       clearTimeout(deadline);
       request.destroy();

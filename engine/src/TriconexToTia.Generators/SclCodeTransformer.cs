@@ -5,22 +5,23 @@ using TriconexToTia.Core.Enums;
 namespace TriconexToTia.Generators;
 
 /// <summary>One variable the TriStation ST declaration contributes to the generated block.</summary>
-internal sealed record StDeclaration(string Name, string Type, VariableDirection Direction);
+public sealed record StDeclaration(string Name, string Type, VariableDirection Direction);
 
 /// <summary>The statements and declarations recovered from a TriStation ST block body.</summary>
-internal sealed record StBlockBody(
+public sealed record StBlockBody(
     string Statements,
     IReadOnlyList<StDeclaration> Declarations,
     IReadOnlyList<string> UnterminatedTypes,
     string Keyword,
-    string? ReturnType);
+    string? ReturnType,
+    bool IsExternStandIn = false);
 
 /// <summary>
 /// Rewrites an ST body for Siemens SCL. The only structural change in the ST
 /// path is prefixing every reference to a block-local variable with '#'.
 /// String literals and comments are left untouched.
 /// </summary>
-internal static class SclCodeTransformer
+public static class SclCodeTransformer
 {
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -39,6 +40,15 @@ internal static class SclCodeTransformer
     private static readonly Regex EndPattern = new(
         @"\bEND_(?:FUNCTION_BLOCK|FUNCTION|PROGRAM|ORGANIZATION_BLOCK)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The block header of a TriStation EXTERN POU, e.g. <c>FUNCTION EXTERN GetDeltaT : TIME</c> or
+    /// <c>FUNCTION_BLOCK EXTERN GATENBX</c>. The <c>EXTERN</c> keyword distinguishes it from the
+    /// SCL wrapper the generator writes.
+    /// </summary>
+    private static readonly Regex ExternDeclarationPattern = new(
+        @"^[ \t]*(?:FUNCTION_BLOCK|FUNCTION|PROGRAM)\s+EXTERN\b[^\r\n]*",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline);
 
     private static readonly Regex VarSectionPattern = new(
         @"\b(?<kind>VAR(?:_(?:INPUT|OUTPUT|IN_OUT|TEMP|STAT))?|CONSTANT)\b(?<body>.*?)\bEND_VAR\b",
@@ -100,6 +110,16 @@ internal static class SclCodeTransformer
 
         var statements = code.Substring(statementsStart, statementsEnd - statementsStart).Trim();
 
+        // A TriStation EXTERN POU carries no executable body: its whole text is the block header
+        // ("FUNCTION EXTERN GetDeltaT : TIME") plus a doc comment. When the declaration lands on the
+        // statement side (the CDATA has no BEGIN), the header line reaches Siemens, which rejects an
+        // inline "FUNCTION EXTERN" as a nested declaration. Remove it so the generated block is empty.
+        var isExternStandIn = ExternDeclarationPattern.IsMatch(statements);
+        statements = ExternDeclarationPattern.Replace(statements, string.Empty).Trim();
+
+        // Only a doc comment is left; the block has no executable statements.
+        if (isExternStandIn && StatementsAreCommentsOnly(statements)) statements = string.Empty;
+
         var keywordMatch = Regex.Match(
             header,
             @"\b(?<keyword>FUNCTION_BLOCK|FUNCTION|PROGRAM|ORGANIZATION_BLOCK)\b\s*(?<name>[A-Za-z_][A-Za-z0-9_]*)?\s*(?::\s*(?<type>[A-Za-z_][A-Za-z0-9_.]*))?",
@@ -147,7 +167,19 @@ internal static class SclCodeTransformer
             declarations.Where(declaration => declaration.Type.Length > 0).ToList(),
             unterminated,
             keyword,
-            returnType);
+            returnType,
+            isExternStandIn);
+    }
+
+    /// <summary>
+    /// True when the text holds nothing but SCL comments (a doc block), so the block has no
+    /// executable statements. Whitespace, line comments and (* *) comments are ignored.
+    /// </summary>
+    private static bool StatementsAreCommentsOnly(string text)
+    {
+        var stripped = Regex.Replace(text, @"\(\*.*?\*\)", " ", RegexOptions.Singleline);
+        stripped = Regex.Replace(stripped, @"//[^\r\n]*", " ");
+        return stripped.Trim().Length == 0;
     }
 
     private static VariableDirection DirectionOf(string sectionKeyword) =>

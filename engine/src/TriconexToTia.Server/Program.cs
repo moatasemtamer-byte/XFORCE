@@ -495,9 +495,13 @@ app.MapPost("/api/inspect", async (HttpRequest request) =>
     return Results.Text(inspected.Json!, "application/json");
 });
 
-// Renders a TriStation project (.pt2/.pt2x) to a printable PDF that mirrors the editor's
-// own FBD sheets (frame, title block, blocks, terminals, wires, comments). Pure managed
-// drawing -- no TriStation, licence or Windows dependency. Same bearer token as /convert.
+// Renders a TriStation project (.pt2/.pt2x) to a printable PDF. The optional form field
+// "mode" selects the content: "fbd" (default) mirrors the editor's own FBD sheets (frame,
+// title block, blocks, terminals, wires, comments); "reports" reproduces the report suite
+// (POU Variables, Instance Variable Connections, Program Variable Listing, Tagnames
+// Complete Listing, POU Cross-Reference, Shared Libraries, Project Implementation) from the
+// embedded Telerik .trdp templates; "both" emits the FBD sheets then the reports. All pure
+// managed drawing -- no TriStation, licence or Windows dependency. Same bearer token as /convert.
 app.MapPost("/api/pdf", async (HttpRequest request) =>
 {
     var (file, filename, form, error) = await ReadUploadAsync(request, authToken);
@@ -515,8 +519,9 @@ app.MapPost("/api/pdf", async (HttpRequest request) =>
             statusCode: StatusCodes.Status415UnsupportedMediaType);
     }
 
-    var projectName = form?["name"].FirstOrDefault();
-    var rendered = await Pt2xPdf.RenderAsync(bytes, filename!, projectName, request.HttpContext.RequestAborted);
+    var projectName = form?["name"].FirstOrDefault() ?? request.Query["name"].FirstOrDefault();
+    var mode = Pt2xPdf.ParseMode(form?["mode"].FirstOrDefault() ?? request.Query["mode"].FirstOrDefault());
+    var rendered = await Pt2xPdf.RenderAsync(bytes, filename!, projectName, mode, request.HttpContext.RequestAborted);
     if (!rendered.Success)
     {
         return Results.Json(

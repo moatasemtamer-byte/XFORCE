@@ -29,6 +29,7 @@ public static class Program
                 "frompt2" => FromPt2.Run(args),
                 "tojson" => FromPt2.ToJson(args),
                 "topdf" => ToPdf.Run(args),
+                "toreport" => ToReport.Run(args),
                 "genfbd" => FbdGenerator.Run(args),
                 "genst" => StGenerator.Run(args),
                 "gendoc" => DocGenerator.Run(args),
@@ -108,6 +109,10 @@ Commands:
                                        (POUs, vars, FBD sheets/wires, tags) for the web viewer.
   topdf  <project.pt2x> <out.pdf>      Render the decompiled FBD sheets (frame, title block,
                                        blocks, wires, comments) to a PDF. In-process, no licence.
+  toreport <project.pt2x> <out.pdf>    Render the TriStation report suite (POU Variables, Instance
+                                       Variable Connections, Program Variable Listing, Tagnames
+                                       Complete Listing, POU Cross-Reference, Shared Libraries,
+                                       Project Implementation) from the embedded .trdp templates.
   genfbd <xml> <pouName> <out.FBD>     Generate one FBD container stream from a PLCopen-XML POU.
   genst  <xml> <pouName> <out.ST>      Generate one ST container stream (CDATA + CRLF) from a PLCopen-XML POU.
   gendoc <xml> <pouName> <out.DOC>      Generate one CTS2Doc container stream from a PLCopen-XML POU.

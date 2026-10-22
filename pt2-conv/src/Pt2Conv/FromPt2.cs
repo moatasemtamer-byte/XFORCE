@@ -15,12 +15,14 @@ namespace Pt2Conv;
 /// or a <c>.ST</c> stream (IEC Structured Text source). Global tags come from
 /// <c>Current/Tagnames/Tagnames.csv</c>.
 /// </summary>
-public sealed class FromPt2
+public sealed partial class FromPt2
 {
     private readonly Dictionary<string, byte[]> _streams;
     private readonly List<Pt2Tag> _tags;
     private readonly Dictionary<string, string> _tagType = new(StringComparer.OrdinalIgnoreCase);
     private List<string>? _projectElems;
+    private Dictionary<string, ElementEvents>? _elementEvents;
+    private string _projectShort = "";
 
     private FromPt2(Dictionary<string, byte[]> streams, List<Pt2Tag> tags)
     {
@@ -122,61 +124,112 @@ public sealed class FromPt2
 
         blocks = self.OrderPous(blocks);
         self.CollectReferencedGlobals(blocks);
+        self._projectShort = Path.GetFileNameWithoutExtension(input);
+        self.ApplyProjectMetadata(blocks, self.ProjectDescription());
+
+        // The sheets are numbered across the whole print.
+        int totalSheets = blocks.Sum(b => b.Sheets.Count);
+        var sheetOffset = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        {
+            int off = 0;
+            foreach (var b in blocks) { sheetOffset[b.Name] = off; off += b.Sheets.Count; }
+        }
+
+        var templates = self.LoadSheetTemplates();
 
         var pous = blocks
             .Where(b => b.Sheets.Count > 0 || b.St != null)
-            .Select(b => new
+            .Select(b =>
             {
-                name = b.Name,
-                pouType = b.PouType,
-                returnType = b.ReturnType,
-                title = b.Title,
-                drawing = new
+                var ctx0 = MacroFor(b, b.Sheets.FirstOrDefault() ?? new Pt2Sheet(), sheetOffset[b.Name] + 1, totalSheets);
+                return new
                 {
-                    number = b.DrawingNumber,
-                    title = b.DrawingTitle,
-                    size = b.DrawingSize,
-                    sheetTemplate = b.SheetTemplate,
-                    rev = b.Revision,
-                    hZones = b.HZoneCount,
-                    vZones = b.VZoneCount,
-                },
-                vars = b.Vars.Select(v => new
-                {
-                    name = v.Name,
-                    dataType = v.DataType,
-                    init = v.Init,
-                    desc = v.Desc,
-                    section = v.Section,
-                    isInstance = v.IsInstance,
-                }).ToArray(),
-                referencedGlobals = b.ReferencedGlobals.ToArray(),
-                st = b.St,
-                sheets = b.Sheets.Select(s => new
-                {
-                    number = s.Number,
-                    title = s.Title,
-                    elems = s.Elems.Select(e => ElemJson(e, b, s, projName, b.Sheets.Count)).ToArray(),
-                    wires = s.Wires.Select(w => new
+                    name = b.Name,
+                    pouType = b.PouType,
+                    returnType = b.ReturnType,
+                    title = b.Title,
+                    drawing = new
                     {
-                        id = w.OldId,
-                        aId = w.AId,
-                        aPin = w.APin,
-                        bId = w.BId,
-                        bPin = w.BPin,
-                        positions = w.Positions.Select(p => new[] { p.X, p.Y }).ToArray(),
+                        number = b.DrawingNumber,
+                        title = b.DrawingTitle,
+                        size = b.DrawingSize,
+                        sheetTemplate = b.SheetTemplate,
+                        rev = b.Revision,
+                        hZones = b.HZoneCount,
+                        vZones = b.VZoneCount,
+                        approvedName = b.ApprovedName,
+                        approvedTime = b.ApprovedTime,
+                        dateTime = b.DateTime,
+                    },
+                    vars = b.Vars.Select(v => new
+                    {
+                        name = v.Name,
+                        dataType = v.DataType,
+                        init = v.Init,
+                        desc = v.Desc,
+                        section = v.Section,
+                        isInstance = v.IsInstance,
                     }).ToArray(),
-                }).ToArray(),
+                    referencedGlobals = b.ReferencedGlobals.ToArray(),
+                    st = b.St,
+                    macros = ctx0.Values(),
+                    sheets = b.Sheets.Select(s =>
+                    {
+                        int global = sheetOffset[b.Name] + s.Number;
+                        var ctx = MacroFor(b, s, global, totalSheets);
+                        return new
+                        {
+                            number = s.Number,
+                            globalNumber = global,
+                            title = s.Title,
+                            macros = ctx.Values(),
+                            elems = s.Elems.Select(e => ElemJson(e, b, s, ctx)).ToArray(),
+                            wires = s.Wires.Select(w => new
+                            {
+                                id = w.OldId,
+                                aId = w.AId,
+                                aPin = w.APin,
+                                bId = w.BId,
+                                bPin = w.BPin,
+                                positions = w.Positions.Select(p => new[] { p.X, p.Y }).ToArray(),
+                            }).ToArray(),
+                        };
+                    }).ToArray(),
+                };
             })
             .ToArray();
 
         var payload = new
         {
             projectName = projName,
+            projectDescription = self.ProjectDescription(),
+            sheetCount = totalSheets,
             pouCount = pous.Length,
             tagCount = tags.Count,
             pous,
             tags = tags.Select(t => new { name = t.Name, type = t.Type, desc = t.Desc, address = t.Address }).ToArray(),
+            templates = templates.Select(t => new
+            {
+                name = t.Key,
+                size = t.Value.Size,
+                hZones = t.Value.HZones,
+                vZones = t.Value.VZones,
+                sheetW = t.Value.SheetW,
+                sheetH = t.Value.SheetH,
+                margin = t.Value.Margin,
+                backgrounds = t.Value.Backgrounds.Select(bg => bg.Select(e => new
+                {
+                    x = e.X,
+                    y = e.Y,
+                    w = e.W,
+                    h = e.H,
+                    box = e.Box,
+                    text = e.Text,
+                    size = e.Size,
+                    align = e.Align,
+                    expandMacros = e.ExpandMacros,
+                }).ToArray()).ToArray(),
+            }).ToArray(),
         };
 
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
@@ -216,12 +269,37 @@ public sealed class FromPt2
 
         blocks = self.OrderPous(blocks);
         self.CollectReferencedGlobals(blocks);
+        self._projectShort = Path.GetFileNameWithoutExtension(input);
+        self.ApplyProjectMetadata(blocks, self.ProjectDescription());
 
         var project = new PdfProject
         {
             Name = projName,
             Description = self.ProjectDescription(),
+            ShortName = self._projectShort,
+            Version = self.ProjectVersion(),
         };
+
+        // The project level macro values.
+        var first = blocks.FirstOrDefault();
+        if (first != null)
+        {
+            project.Macros["%PROJECT_NAME"] = first.ProjectName;
+            project.Macros["%COMPANY_INFO1"] = first.Company1;
+            project.Macros["%COMPANY_INFO2"] = first.Company2;
+            project.Macros["%COMPANY_INFO3"] = first.Company3;
+            project.Macros["%CREATED_BY"] = first.User;
+            project.Macros["%MODIFIED_BY"] = first.User;
+            project.Macros["%PRINTED_BY"] = first.User;
+        }
+
+        // The sheet templates.
+        foreach (var (name, tpl) in self.LoadSheetTemplates()) project.Templates[name] = tpl;
+
+        // The sheets are numbered across the whole print.
+        int totalSheets = blocks.Sum(b => b.Sheets.Count);
+        project.SheetCount = totalSheets;
+        int global = 0;
 
         foreach (var b in blocks.Where(b => b.Sheets.Count > 0 || b.St != null))
         {
@@ -243,6 +321,9 @@ public sealed class FromPt2
                 },
                 St = b.St,
                 ReferencedGlobals = b.ReferencedGlobals.ToList(),
+                ApprovedName = b.ApprovedName,
+                ApprovedTime = b.ApprovedTime,
+                DateTime = b.DateTime,
                 Vars = b.Vars.Select(v => new PdfVar
                 {
                     Name = v.Name,
@@ -256,8 +337,11 @@ public sealed class FromPt2
 
             foreach (var s in b.Sheets)
             {
-                var sheet = new PdfSheet { Number = s.Number, Title = s.Title };
-                foreach (var e in s.Elems) sheet.Elems.Add(BuildPdfElem(e, b, s, projName, b.Sheets.Count));
+                global++;
+                var sheet = new PdfSheet { Number = s.Number, GlobalNumber = global, Title = s.Title };
+                var ctx = MacroFor(b, s, global, totalSheets);
+                foreach (var (k, v) in ctx.Values()) sheet.Macros[k] = v;
+                foreach (var e in s.Elems) sheet.Elems.Add(BuildPdfElem(e, b, s, ctx));
                 foreach (var w in s.Wires)
                 {
                     sheet.Wires.Add(new PdfWire
@@ -283,7 +367,7 @@ public sealed class FromPt2
         return project;
     }
 
-    private static PdfElem BuildPdfElem(Pt2Elem e, Pt2Block b, Pt2Sheet s, string projName, int sheetCount)
+    private static PdfElem BuildPdfElem(Pt2Elem e, Pt2Block b, Pt2Sheet s, MacroContext ctx)
     {
         switch (e)
         {
@@ -302,10 +386,10 @@ public sealed class FromPt2
             case Pt2VarElem v:
             {
                 string annotation = v.Annotation.Contains("DESCRIPTION")
-                    ? ExpandMacros(v.Annotation, b, s, projName, sheetCount)
+                    ? ExpandMacros(v.Annotation, ctx)
                         .Replace("%DESCRIPTION", b.Vars.FirstOrDefault(x => string.Equals(x.Name, v.Name, StringComparison.OrdinalIgnoreCase))?.Desc ?? "")
                         .Trim()
-                    : ExpandMacros(v.Annotation, b, s, projName, sheetCount);
+                    : ExpandMacros(v.Annotation, ctx);
                 return new PdfVarElem
                 {
                     Id = v.OldId,
@@ -324,7 +408,7 @@ public sealed class FromPt2
                 {
                     Id = c.OldId,
                     X = c.RawX, Y = c.RawY, W = c.RawW, H = c.RawH,
-                    Text = c.ExpandMacros ? ExpandMacros(c.Text, b, s, projName, sheetCount) : c.Text,
+                    Text = c.ExpandMacros ? ExpandMacros(c.Text, ctx) : c.Text,
                     Border = c.Border,
                     Align = c.Align,
                     TextSize = c.TextSize,
@@ -340,7 +424,7 @@ public sealed class FromPt2
         }
     }
 
-    private static object ElemJson(Pt2Elem e, Pt2Block b, Pt2Sheet s, string projName, int sheetCount)
+    private static object ElemJson(Pt2Elem e, Pt2Block b, Pt2Sheet s, MacroContext ctx)
     {
         switch (e)
         {
@@ -362,7 +446,7 @@ public sealed class FromPt2
 
             case Pt2VarElem v:
             {
-                string annotation = ExpandMacros(v.Annotation, b, s, projName, sheetCount);
+                string annotation = ExpandMacros(v.Annotation, ctx);
                 if (v.Annotation.Contains("DESCRIPTION"))
                 {
                     string desc = b.Vars.FirstOrDefault(x => string.Equals(x.Name, v.Name, StringComparison.OrdinalIgnoreCase))?.Desc ?? "";
@@ -394,7 +478,7 @@ public sealed class FromPt2
                     y = c.RawY,
                     w = c.RawW,
                     h = c.RawH,
-                    text = c.ExpandMacros ? ExpandMacros(c.Text, b, s, projName, sheetCount) : c.Text,
+                    text = c.ExpandMacros ? ExpandMacros(c.Text, ctx) : c.Text,
                     border = c.Border,
                     align = c.Align,
                     textSize = c.TextSize,
@@ -406,22 +490,193 @@ public sealed class FromPt2
         }
     }
 
-    private static string ExpandMacros(string text, Pt2Block b, Pt2Sheet s, string projName, int sheetCount)
+    private static string ExpandMacros(string text, MacroContext ctx) => ctx.Expand(text);
+
+    /// <summary>Builds the macro values of one sheet: the project data, the drawing data and
+    /// the sheet's position in the whole print.</summary>
+    private static MacroContext MacroFor(Pt2Block b, Pt2Sheet s, int globalNumber, int totalSheets)
     {
-        if (text.IndexOf('%') < 0) return text;
         string sheetTitle = string.IsNullOrWhiteSpace(s.Title)
             ? (s.Number == 1 ? b.Title : "")
             : s.Title;
-        return text
-            .Replace("%PROJECT_NAME", projName)
-            .Replace("%ELEMENT_NAME", b.Name)
-            .Replace("%DRAWING_TITLE", b.DrawingTitle)
-            .Replace("%DRAWING_NUMBER", b.DrawingNumber)
-            .Replace("%DRAWING_SIZE", b.DrawingSize)
-            .Replace("%REVISION", b.Revision)
-            .Replace("%SHEET_TITLE", sheetTitle)
-            .Replace("%SHEET_NUMBER", s.Number.ToString())
-            .Replace("%SHEET_COUNT", sheetCount.ToString());
+
+        // TriStation leaves the revision of the title block empty when the drawing
+        // carries no revision of its own.
+        string revision = b.Revision;
+
+        var ctx = new MacroContext
+        {
+            ProjectName = b.ProjectName,
+            ProjectShort = b.ProjectShort,
+            ProjectVersion = b.ProjectVersion,
+            Company1 = b.Company1,
+            Company2 = b.Company2,
+            Company3 = b.Company3,
+            User = b.User,
+            ElementName = b.Name,
+            DrawingTitle = b.DrawingTitle,
+            DrawingNumber = b.DrawingNumber,
+            DrawingSize = b.DrawingSize,
+            Revision = revision,
+            SheetTemplate = b.SheetTemplate,
+            SheetTitle = sheetTitle,
+            SheetNumber = globalNumber,
+            SheetCount = totalSheets,
+            CreatedDate = b.CreatedDate,
+            CreatedTime = b.CreatedTime,
+            ModifiedDate = b.ModifiedDate,
+            ModifiedTime = b.ModifiedTime,
+            PrintedDate = b.PrintedDate,
+            PrintedTime = b.PrintedTime,
+            ApprovedName = b.ApprovedName,
+            ApprovedTime = b.ApprovedTime,
+        };
+        ctx.YearModified = YearOf(ctx.ModifiedDate);
+        return ctx;
+    }
+
+    /// <summary>The four digit year of a M/d/yyyy stamp.</summary>
+    private static string YearOf(string date)
+    {
+        if (date.Length < 4) return "";
+        return date.Substring(date.Length - 4);
+    }
+
+    /// <summary>Splits a container timestamp into the date and time parts TriStation shows.</summary>
+    public static (string Date, string Time) SplitStamp(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return ("", "");
+        if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+            return (dt.ToString("M/d/yyyy", CultureInfo.InvariantCulture), dt.ToString("h:mm:ss tt", CultureInfo.InvariantCulture));
+        return ("", "");
+    }
+
+    // ------------------------------------------------------- container metadata
+
+    /// <summary>The company info and the user that last logged in (Workspace.Xml).</summary>
+    private void ReadWorkspace(out string c1, out string c2, out string c3, out string user)
+    {
+        c1 = c2 = c3 = user = "";
+        if (!_streams.TryGetValue("Workspace.Xml", out var data)) return;
+        try
+        {
+            var root = XDocument.Parse(Encoding.UTF8.GetString(data).Replace("\0", "")).Root;
+            if (root == null) return;
+            c1 = (string?)root.Attribute("CompanyInfo1") ?? "";
+            c2 = (string?)root.Attribute("CompanyInfo2") ?? "";
+            c3 = (string?)root.Attribute("CompanyInfo3") ?? "";
+            user = (string?)root.Attribute("LastLoggedUser") ?? "";
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>The project's version (ProjectInfo/ProjectInfo.Xml), e.g. "1.0".</summary>
+    private string ProjectVersion()
+    {
+        if (!_streams.TryGetValue("ProjectInfo/ProjectInfo.Xml", out var data)) return "";
+        try
+        {
+            var root = XDocument.Parse(Encoding.UTF8.GetString(data)).Root;
+            if (root == null) return "";
+            string major = (string?)root.Attribute("MajorProjectVersion") ?? "";
+            string minor = (string?)root.Attribute("MinorProjectVersion") ?? "";
+            if (major.Length == 0) return "";
+            return minor.Length > 0 ? major + "." + minor : major;
+        }
+        catch (Exception) { return ""; }
+    }
+
+    /// <summary>The lifecycle events of one element (created / modified / printed) as recorded
+    /// in the project catalog (Current/Project.xml).</summary>
+    private sealed class ElementEvents
+    {
+        public string Created = "";
+        public string Modified = "";
+        public string Printed = "";
+    }
+
+    /// <summary>The per element lifecycle events of the project catalog.</summary>
+    private Dictionary<string, ElementEvents> ReadElementEvents()
+    {
+        if (_elementEvents != null) return _elementEvents;
+        _elementEvents = new Dictionary<string, ElementEvents>(StringComparer.OrdinalIgnoreCase);
+        if (!_streams.TryGetValue("Current/Project.xml", out var data)) return _elementEvents;
+        try
+        {
+            var doc = XDocument.Parse(Encoding.UTF8.GetString(data));
+            foreach (var cls in doc.Descendants().Where(e => e.Name.LocalName == "Class" && e.Attribute("ElemName") != null))
+            {
+                string name = (string)cls.Attribute("ElemName")!;
+                if (_elementEvents.ContainsKey(name)) continue;
+                var ev = new ElementEvents();
+                foreach (var sub in cls.Elements().Where(e => e.Name.LocalName == "Class"))
+                {
+                    string embed = (string?)sub.Attribute("Embed") ?? "";
+                    string date = (string?)sub.Attribute("date") ?? "";
+                    switch (embed)
+                    {
+                        case "EventCreated": ev.Created = date; break;
+                        case "EventModified": ev.Modified = date; break;
+                        case "EventPrinted": ev.Printed = date; break;
+                    }
+                }
+                _elementEvents[name] = ev;
+            }
+        }
+        catch (Exception) { }
+        return _elementEvents;
+    }
+
+    /// <summary>The sheet templates stored in the container, keyed by their element name
+    /// (e.g. "SheetTemplateD").</summary>
+    private List<KeyValuePair<string, SheetTemplate>> LoadSheetTemplates()
+    {
+        var list = new List<KeyValuePair<string, SheetTemplate>>();
+        foreach (var (path, data) in _streams)
+        {
+            var parts = path.Split('/');
+            if (parts.Length < 3) continue;
+            string folder = parts[parts.Length - 2];
+            if (!folder.StartsWith("SheetTemplate", StringComparison.OrdinalIgnoreCase)) continue;
+            var tpl = SheetTemplate.Parse(data, folder);
+            if (tpl != null && tpl.Backgrounds.Count > 0) list.Add(new(folder, tpl));
+        }
+        return list;
+    }
+
+    /// <summary>Fills the project level macro values into every block and computes the
+    /// element's lifecycle stamps.</summary>
+    private void ApplyProjectMetadata(List<Pt2Block> blocks, string projectDescription)
+    {
+        ReadWorkspace(out string c1, out string c2, out string c3, out string user);
+        string version = ProjectVersion();
+        var events = ReadElementEvents();
+        string flat = string.Join(" ", (projectDescription ?? "").Split('\n', '\r').Select(x => x.Trim()).Where(x => x.Length > 0));
+
+        foreach (var b in blocks)
+        {
+            b.ProjectName = flat;
+            b.ProjectShort = _projectShort;
+            b.ProjectVersion = version;
+            b.Company1 = c1;
+            b.Company2 = c2;
+            b.Company3 = c3;
+            b.User = user;
+
+            var (createdDate, createdTime) = SplitStamp(events.TryGetValue(b.Name, out var ev) ? ev.Created : "");
+            b.CreatedDate = createdDate;
+            b.CreatedTime = createdTime;
+            var (printedDate, printedTime) = SplitStamp(events.TryGetValue(b.Name, out var ev2) ? ev2.Printed : "");
+            b.PrintedDate = printedDate;
+            b.PrintedTime = printedTime;
+
+            // The drawing's own timestamp wins over the catalog's element event.
+            var (modDate, modTime) = SplitStamp(b.DateTime);
+            if (modDate.Length == 0 && events.TryGetValue(b.Name, out var ev3))
+                (modDate, modTime) = SplitStamp(ev3.Modified);
+            b.ModifiedDate = modDate;
+            b.ModifiedTime = modTime;
+        }
     }
 
     // ---------------------------------------------------------------- container
@@ -554,6 +809,7 @@ public sealed class FromPt2
                 InitialValue = Get(f, "InitialValue"),
                 IsSafety = Get(f, "IsSafety"),
                 SharedRead = Get(f, "SharedRead"),
+                Retentive = Get(f, "Retentive"),
                 EnableMultipleWrites = Get(f, "EnableMultipleWrites"),
                 AliasNumberSelection = Get(f, "AliasNumberSelection"),
                 UserAliasLegacy = Get(f, "UserAliasLegacy"),
@@ -750,6 +1006,7 @@ public sealed class FromPt2
             Revision = (string?)root.Attribute("rev") ?? "",
             ApprovedName = (string?)root.Attribute("approvedName") ?? "",
             ApprovedTime = (string?)root.Attribute("approvedTime") ?? "",
+            DateTime = (string?)root.Attribute("dateTime") ?? "",
             ExtOptFlags = Int(root, "extOptFlags"),
             CemEventInputs = Int(root, "cemEventInputs"),
             CemActionOutputs = Int(root, "cemActionOutputs"),
@@ -825,6 +1082,13 @@ public sealed class FromPt2
 
     private static void ReadSheet(Pt2Sheet sheet, XElement displayables)
     {
+        // TriStation stores every drawing element twice: the live one and a snapshot
+        // copy of the same element (same class, same geometry, same content, but a
+        // different localId). Only the live set is printed, so duplicates are dropped
+        // by their signature - keeping the first occurrence in document order.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var wires = new List<Pt2Wire>();
+
         foreach (var c in displayables.Elements().Where(e => e.Name.LocalName == "Class"))
         {
             string ct = (string?)c.Attribute("ClassType") ?? "";
@@ -861,6 +1125,7 @@ public sealed class FromPt2
                                 Wire = AttrInt(pin, "connectId"),
                                 Negated = string.Equals((string?)pin.Attribute("invertedPin"), "True", StringComparison.OrdinalIgnoreCase),
                             });
+                    if (!seen.Add(Sig(ct, c, b.TypeName, b.Instance))) break;
                     sheet.Elems.Add(b);
                     break;
                 }
@@ -888,6 +1153,7 @@ public sealed class FromPt2
                         OutWire = AttrInt(c, "outConnectId"),
                     };
                     Place(v, c);
+                    if (!seen.Add(Sig(ct, c, v.Name, v.VarType))) break;
                     sheet.Elems.Add(v);
                     break;
                 }
@@ -912,7 +1178,7 @@ public sealed class FromPt2
                         foreach (var p in positions.Elements().Where(e => e.Name.LocalName == "Class"))
                             w.Positions.Add((Int(p, "posX"), Int(p, "posY")));
                     }
-                    sheet.Wires.Add(w);
+                    wires.Add(w);
                     break;
                 }
                 case "CDGMnetworkDividerXml":
@@ -931,6 +1197,7 @@ public sealed class FromPt2
                     d.Y = Pos(d.RawY);
                     d.W = Size(d.RawW);
                     d.H = Size(d.RawH);
+                    if (!seen.Add(Sig(ct, c, d.Orientation, ""))) break;
                     sheet.Dividers.Add(d);
                     break;
                 }
@@ -950,11 +1217,45 @@ public sealed class FromPt2
                      };
                     if (comment.TextSize <= 0) comment.TextSize = 10;
                     Place(comment, c);
+                    if (!seen.Add(Sig(ct, c, comment.Text, comment.Border))) break;
                     sheet.Elems.Add(comment);
                     break;
                 }
             }
         }
+
+        // The snapshot copies of the wires follow the same path as the live ones but
+        // point at the dropped snapshot elements, so they are matched by their path:
+        // the wire whose endpoints still exist is the one that is kept.
+        var live = new HashSet<int>(sheet.Elems.Select(e => e.OldId));
+        var byPath = new Dictionary<string, Pt2Wire>(StringComparer.Ordinal);
+        var order = new List<Pt2Wire>();
+        foreach (var w in wires)
+        {
+            string path = string.Join(";", w.Positions.Select(p => p.X + ":" + p.Y));
+            if (byPath.TryGetValue(path, out var prev))
+            {
+                bool prevOk = prev.AId < 0 || live.Contains(prev.AId);
+                bool curOk = w.AId < 0 || live.Contains(w.AId);
+                if (!prevOk && curOk)
+                {
+                    byPath[path] = w;
+                    order[order.IndexOf(prev)] = w;
+                }
+                continue;
+            }
+            byPath[path] = w;
+            order.Add(w);
+        }
+        sheet.Wires.AddRange(order);
+    }
+
+    /// <summary>Identity of a drawing element: its class, its place on the sheet and its content.</summary>
+    private static string Sig(string classType, XElement c, string a, string b)
+    {
+        return string.Join("|", classType,
+            Int(c, "posX"), Int(c, "posY"), Int(c, "width"), Int(c, "height"),
+            a, b);
     }
 
     private static string MapPouType(string? raw) => (raw ?? "").ToLowerInvariant() switch
@@ -2326,6 +2627,7 @@ public sealed class FromPt2
         public string InitialValue = "";
         public string IsSafety = "";
         public string SharedRead = "";
+        public string Retentive = "";
         public string EnableMultipleWrites = "";
         public string AliasNumberSelection = "";
         public string UserAliasLegacy = "";
@@ -2393,6 +2695,7 @@ public sealed class FromPt2
         public string Revision = "";
         public string ApprovedName = "";
         public string ApprovedTime = "";
+        public string DateTime = "";
         public int ExtOptFlags = 3;
         public int CemEventInputs = 0;
         public int CemActionOutputs = 0;
@@ -2400,6 +2703,16 @@ public sealed class FromPt2
         public string[] E09 = new string[10];
         public int HZoneCount;
         public int VZoneCount;
+        // The project level macro values (the same for every POU in the container).
+        public string ProjectName = "";
+        public string ProjectShort = "";
+        public string ProjectVersion = "";
+        public string Company1 = "", Company2 = "", Company3 = "";
+        public string User = "";
+        // The element's lifecycle stamps.
+        public string CreatedDate = "", CreatedTime = "";
+        public string ModifiedDate = "", ModifiedTime = "";
+        public string PrintedDate = "", PrintedTime = "";
         public List<Pt2Var> Vars = new();
         public List<Pt2Var> DeclaredGlobals = new();
         public List<Pt2Sheet> Sheets = new();

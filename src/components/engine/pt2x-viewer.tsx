@@ -23,6 +23,17 @@ const GZIP_UPLOAD_THRESHOLD = 256 * 1024;
 // server is busy. "uploading" reports a real percentage; the others are states.
 type Phase = "idle" | "compressing" | "uploading" | "reading" | "viewing" | "error";
 
+// The kind of printable PDF the engine should build: the FBD sheets, the TriStation
+// report suite (POU Variables, Tagnames Complete Listing, Project Implementation, …),
+// or both.
+type PdfContent = "fbd" | "reports" | "both";
+
+const PDF_CONTENT_LABEL: Record<PdfContent, string> = {
+  fbd: "FBD sheets",
+  reports: "Report suite",
+  both: "FBD + reports",
+};
+
 const PHASE_LABEL: Record<Exclude<Phase, "idle" | "error">, string> = {
   compressing: "Preparing the file…",
   uploading: "Uploading",
@@ -258,6 +269,79 @@ export function PtxViewer() {
   const [pouFilter, setPouFilter] = useState("");
   const [tab, setTab] = useState<"interface" | "tags">("interface");
   const [zoom, setZoom] = useState<SheetZoom>("fit");
+  // FBD sheets vs the printable PDF of the same project.
+  const [viewMode, setViewMode] = useState<"fbd" | "pdf">("fbd");
+  // What the printable PDF contains: the FBD sheets, the report suite, or both.
+  const [pdfContent, setPdfContent] = useState<PdfContent>("fbd");
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfPhase, setPdfPhase] = useState<"idle" | "rendering" | "ready" | "error">("idle");
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  // Keep the uploaded file so the PDF can be generated on demand without a re-upload.
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const pdfUrlRef = useRef<string | null>(null);
+  // Which content the cached blob URL belongs to, so switching content re-renders.
+  const pdfContentRef = useRef<PdfContent | null>(null);
+
+  const clearPdf = useCallback(() => {
+    if (pdfUrlRef.current) {
+      URL.revokeObjectURL(pdfUrlRef.current);
+      pdfUrlRef.current = null;
+    }
+    pdfContentRef.current = null;
+    setPdfUrl(null);
+    setPdfPhase("idle");
+    setPdfError(null);
+  }, []);
+
+  // Renders the current project to PDF via the engine, caching the blob URL so the
+  // toggle is instant after the first switch. Re-renders when the content selection
+  // changes (FBD sheets / report suite / both). Runs once per project + selection.
+  const renderPdf = useCallback(async (content: PdfContent) => {
+    if (!sourceFile || pdfPhase === "rendering") return;
+    if (pdfUrlRef.current && pdfContentRef.current === content) return;
+    setPdfError(null);
+    setPdfPhase("rendering");
+    try {
+      const payload = await gzipForUpload(sourceFile);
+      const body = new FormData();
+      body.append("file", payload, `${sourceFile.name}.gz`);
+      const response = await fetch(
+        `/api/engine/pdf?name=${encodeURIComponent(sourceFile.name)}&mode=${content}`,
+        {
+          method: "POST",
+          body,
+        },
+      );
+      if (!response.ok) {
+        let message = `The server returned ${response.status}.`;
+        try {
+          const parsed = (await response.json()) as { error?: string };
+          if (parsed.error) message = parsed.error;
+        } catch {
+          // non-JSON error body
+        }
+        setPdfError(message);
+        setPdfPhase("error");
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      // Replace any previously cached blob (content may have changed).
+      if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+      pdfUrlRef.current = url;
+      pdfContentRef.current = content;
+      setPdfUrl(url);
+      setPdfPhase("ready");
+    } catch (error) {
+      setPdfError(
+        `The PDF could not be generated: ${error instanceof Error ? error.message : "unknown error"}.`,
+      );
+      setPdfPhase("error");
+    }
+  }, [sourceFile, pdfPhase]);
+
+  // Release the blob URL when the viewer goes away.
+  useEffect(() => () => clearPdf(), [clearPdf]);
 
   // Controls are locked for every phase except idle/error.
   const busy = phase !== "idle" && phase !== "error";
@@ -267,6 +351,9 @@ export function PtxViewer() {
     setError(null);
     setProject(null);
     setUploadPct(0);
+    setSourceFile(file);
+    setViewMode("fbd");
+    clearPdf();
     setPhase("compressing");
     const startedAt = Date.now();
     try {
@@ -347,7 +434,7 @@ export function PtxViewer() {
       );
       setPhase("error");
     }
-  }, []);
+  }, [clearPdf]);
 
   // A convert run can hand its freshly built .pt2x straight to the viewer via
   // sessionStorage (set by the convert form's "Open in viewer" button).
@@ -477,6 +564,86 @@ export function PtxViewer() {
             <NxStat label="Tags" value={String(project.tagCount)} />
           </div>
 
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="inline-flex border border-nx-line">
+              {(["fbd", "pdf"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => {
+                    setViewMode(mode);
+                    if (mode === "pdf") void renderPdf(pdfContent);
+                  }}
+                  className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors ${
+                    viewMode === mode ? "bg-nx-green-100 text-nx-ink" : "text-nx-hint hover:bg-nx-green-50"
+                  }`}
+                >
+                  {mode === "fbd" ? "FBD" : "PDF"}
+                </button>
+              ))}
+            </div>
+            {viewMode === "pdf" ? (
+              <div className="inline-flex border border-nx-line">
+                {(["fbd", "reports", "both"] as const).map((content) => (
+                  <button
+                    key={content}
+                    type="button"
+                    onClick={() => {
+                      setPdfContent(content);
+                      void renderPdf(content);
+                    }}
+                    disabled={pdfPhase === "rendering"}
+                    className={`px-3 py-1.5 text-xs font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      pdfContent === content ? "bg-nx-green-100 text-nx-ink" : "text-nx-hint hover:bg-nx-green-50"
+                    }`}
+                  >
+                    {PDF_CONTENT_LABEL[content]}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {viewMode === "pdf" && pdfUrl ? (
+              <a
+                href={pdfUrl}
+                download={`${(project.projectName || sourceName || "project").replace(/\.(pt2x?|gz)$/i, "")}.pdf`}
+                className="text-xs font-semibold text-nx-green-700 underline-offset-2 hover:underline"
+              >
+                Download {PDF_CONTENT_LABEL[pdfContent]} as PDF
+              </a>
+            ) : null}
+          </div>
+
+          {viewMode === "pdf" ? (
+            <div className="space-y-3">
+              {pdfPhase === "rendering" ? (
+                <div className="flex items-center gap-2 border border-nx-line bg-nx-green-50 px-4 py-3 text-xs text-nx-ink">
+                  <span className="inline-block h-2 w-2 animate-pulse bg-nx-green-700" />
+                  Building the printable PDF from the project…
+                </div>
+              ) : null}
+              {pdfPhase === "error" ? (
+                <div className="border-2 border-nx-fail-fg/50 bg-nx-fail-bg px-5 py-4 text-sm font-semibold text-nx-fail-fg">
+                  {pdfError}
+                </div>
+              ) : null}
+              {pdfUrl ? (
+                <object
+                  data={pdfUrl}
+                  type="application/pdf"
+                  className="h-[80vh] w-full border border-nx-line bg-nx-white"
+                  aria-label="PT2X PDF"
+                >
+                  <p className="p-4 text-xs text-nx-hint">
+                    Your browser cannot display the PDF inline.{" "}
+                    <a href={pdfUrl} className="font-semibold text-nx-green-700 underline">
+                      Download it instead
+                    </a>
+                    .
+                  </p>
+                </object>
+              ) : null}
+            </div>
+          ) : (
           <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
             <div className="border border-nx-line bg-nx-white">
               <div className="border-b border-nx-line p-2">
@@ -600,6 +767,7 @@ export function PtxViewer() {
               </div>
             </div>
           </div>
+          )}
         </>
       ) : null}
 

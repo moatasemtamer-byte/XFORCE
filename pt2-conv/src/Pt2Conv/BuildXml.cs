@@ -125,10 +125,13 @@ public static class BuildXml
             var tn = e.Attribute("typeName");
             if (tn != null && !string.IsNullOrEmpty(tn.Value)) referencedTypes.Add(tn.Value);
         }
+        // Duplicate POU elements in the export (same name, identical body) must only be
+        // generated once, otherwise we overwrite the stream with the same content twice.
         var pouNames = pouEls
             .Select(e => (string?)e.Attribute("name"))
             .Where(n => !string.IsNullOrEmpty(n))
             .Select(n => n!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         // Guard: the XML's program POU must exist in the template, otherwise the
@@ -183,12 +186,15 @@ public static class BuildXml
             }
             try
             {
-                byte[] gen = lang == "FBD"
-                    ? FbdGenerator.GenerateBytes(xmlPath, pou, tagDesc, referencedTypes)
-                    : StGenerator.Generate(xmlPath, pou);
                 var target = tree.FindIndex(t => t.Path.StartsWith(dirPrefix, StringComparison.Ordinal) &&
                                                  t.Path.EndsWith("." + lang, StringComparison.OrdinalIgnoreCase));
                 if (target < 0) { Console.WriteLine($"  skip {pou}: no {lang} stream"); continue; }
+                // The exporter writes one <pou> element per stored diagram copy: a POU that
+                // appears twice is stored as primary + secondary sheet bodies.
+                bool duplicated = pouEls.Count(e => string.Equals((string?)e.Attribute("name"), pou, StringComparison.OrdinalIgnoreCase)) > 1;
+                byte[] gen = lang == "FBD"
+                    ? FbdGenerator.GenerateBytes(xmlPath, pou, tagDesc, referencedTypes, CountSheets(tree[target].Data), duplicated)
+                    : StGenerator.Generate(xmlPath, pou);
                 long oldLen = tree[target].Data.Length;
                 tree[target] = (tree[target].Path, gen);
                 Console.WriteLine($"  {pou}: {(lang == "FBD" ? "FBD" : "ST ")} {oldLen} -> {gen.Length} B");
@@ -313,6 +319,9 @@ public static class BuildXml
     /// <summary>Learns FBD library-block metadata from every template FBD stream.</summary>
     private static void LoadLibraryFromTemplate(List<(string Path, byte[] Data)> streams)
     {
+        var proj = streams.Find(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase));
+        if (proj.Data != null)
+            try { FbdGenerator.LoadLibraryNames(Encoding.UTF8.GetString(proj.Data)); } catch { }
         foreach (var s in streams)
             if (s.Path.EndsWith(".FBD", StringComparison.OrdinalIgnoreCase))
                 FbdGenerator.LoadLibraryFromFbd(Encoding.UTF8.GetString(s.Data));
@@ -361,6 +370,19 @@ public static class BuildXml
         return p != null &&
                p.Descendants().FirstOrDefault(e => e.Name.LocalName == "ST") != null &&
                p.Descendants().FirstOrDefault(e => e.Name.LocalName == "FBD") == null;
+    }
+
+    /// <summary>Number of sheet entries in an existing FBD stream (0 when unparseable).</summary>
+    private static int CountSheets(byte[] data)
+    {
+        try
+        {
+            var d = XDocument.Parse(Encoding.UTF8.GetString(data));
+            var col = d.Root?.Elements().FirstOrDefault(e =>
+                e.Name.LocalName == "Collection" && (string?)e.Attribute("Name") == "sheets");
+            return col == null ? 0 : col.Elements().Count(e => e.Name.LocalName == "Class");
+        }
+        catch { return 0; }
     }
 
     private static string Sha256Hex(byte[] data)

@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\base.pt2x.gz" LogicalName="Pt2Conv.Resources.base.pt2x.gz" />
+    <EmbeddedResource Include="Resources\reports\*.trdp" LogicalName="Pt2Conv.Resources.reports.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

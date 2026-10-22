@@ -189,6 +189,19 @@ public sealed class SclGenerator : IGenerator
             var unwrapped = SclCodeTransformer.UnwrapBlock(source);
             var statements = unwrapped?.Statements ?? source;
 
+            if (unwrapped is not null && unwrapped.IsExternStandIn && statements.Length == 0)
+            {
+                // A TriStation EXTERN POU is a stub for a runtime function (GetDeltaT, _GetTimer,
+                // INFINITY_REAL) whose implementation lives in the controller, not in the export. TIA
+                // needs the function to exist and to assign its result, so a body standing in for the
+                // runtime function is emitted; the report lists the block as a manual review point.
+                statements = ExternStandInBody(block);
+                context.AddManualAction(
+                    $"Block \"{block.Name}\" stands in for a TriStation runtime function that has no "
+                    + "Siemens equivalent; the generated body is a placeholder. Re-test the logic that "
+                    + "calls it and replace the body with the intended Siemens instruction.");
+            }
+
             if (unwrapped is not null)
             {
                 // The XML interface of a TriStation ST block is often empty: the declarations live
@@ -361,10 +374,12 @@ public sealed class SclGenerator : IGenerator
         builder.AppendLine("VERSION : 0.1");
         builder.AppendLine();
 
-        AppendSection(builder, "VAR_EXTERN", block, VariableDirection.External);
+        // SCL spells these VAR_EXTERNAL and VAR_IN_OUT; VAR_INOUT is not a keyword and the
+        // external-source importer rejects it outright.
+        AppendSection(builder, "VAR_EXTERNAL", block, VariableDirection.External);
         AppendSection(builder, "VAR_INPUT", block, VariableDirection.Input);
         AppendSection(builder, "VAR_OUTPUT", block, VariableDirection.Output);
-        AppendSection(builder, "VAR_INOUT", block, VariableDirection.InOut);
+        AppendSection(builder, "VAR_IN_OUT", block, VariableDirection.InOut);
 
         // A function block holds its locals statically; an OB or FC local is a temporary. The
         // wrapper is a function block even though the block it was built from is an OB.
@@ -498,6 +513,35 @@ public sealed class SclGenerator : IGenerator
         "Time" => "T#0s",
         _ => null,
     };
+
+    /// <summary>
+    /// A placeholder body for a TriStation EXTERN runtime stub. The result is assigned so TIA accepts
+    /// the function; a Zero value is used because the runtime function has no Siemens equivalent. The
+    /// substitution is recorded as a manual action so the placeholder is not mistaken for the real
+    /// behaviour.
+    /// </summary>
+    private static string ExternStandInBody(PlcBlock block)
+    {
+        var returnType = Unquote(block.MappedReturnType ?? block.ReturnType);
+        if (returnType.Length == 0 || returnType == "Void") return string.Empty;
+
+        // SCL assigns a function's result through the function name (unquoted, as declared).
+        var result = block.Name;
+        var value = returnType switch
+        {
+            "Bool" => "FALSE",
+            "Time" => "T#0s",
+            "Real" or "LReal" => "0.0",
+            "DTL" => "DTL#1970-01-01-00:00:00",
+            "Date_And_Time" or "DT" => "DT#1990-01-01-00:00:00",
+            "TOD" or "Time_Of_Day" => "TOD#00:00:00",
+            "Date" => "D#1970-01-01",
+            _ => "0",
+        };
+
+        return "    // TriStation runtime stub; assign a placeholder for the result.\n"
+            + "    " + result + " := " + value + ";";
+    }
 
     private sealed class BlockArtifacts
     {

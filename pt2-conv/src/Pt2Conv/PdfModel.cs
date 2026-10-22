@@ -12,6 +12,16 @@ public sealed class PdfProject
 {
     public string Name = "";
     public string Description = "";
+    /// <summary>The container's file name without extension (the project as TriStation knows it).</summary>
+    public string ShortName = "";
+    /// <summary>The project's version, e.g. "1.0" (ProjectInfo/ProjectInfo.Xml).</summary>
+    public string Version = "";
+    /// <summary>Project level macro values (company info, user, project version).</summary>
+    public Dictionary<string, string> Macros = new(StringComparer.Ordinal);
+    /// <summary>The sheet templates found in the container, keyed by their element name.</summary>
+    public Dictionary<string, SheetTemplate> Templates = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The total number of FBD sheets in the project (the %SHEET_COUNT).</summary>
+    public int SheetCount;
     public List<PdfPou> Pous = new();
     public List<PdfTag> Tags = new();
 }
@@ -27,6 +37,11 @@ public sealed class PdfPou
     public List<string> ReferencedGlobals = new();
     public string? St;
     public List<PdfSheet> Sheets = new();
+    /// <summary>The drawing's approval data (FBD root: approvedName / approvedTime).</summary>
+    public string ApprovedName = "";
+    public string ApprovedTime = "";
+    /// <summary>The drawing's last-saved timestamp (FBD root: dateTime).</summary>
+    public string DateTime = "";
 }
 
 public sealed class PdfDrawing
@@ -61,7 +76,11 @@ public sealed class PdfTag
 public sealed class PdfSheet
 {
     public int Number;
+    /// <summary>The sheet's number in the whole print (the %SHEET_NUMBER, counted across POUs).</summary>
+    public int GlobalNumber;
     public string Title = "";
+    /// <summary>Element/sheet level macro values (drawing data, dates, sheet number).</summary>
+    public Dictionary<string, string> Macros = new(StringComparer.Ordinal);
     public List<PdfElem> Elems = new();
     public List<PdfWire> Wires = new();
 }

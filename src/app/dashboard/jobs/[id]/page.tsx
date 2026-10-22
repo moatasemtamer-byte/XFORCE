@@ -160,7 +160,17 @@ export default async function JobDetailPage({ params }: PageProps<"/dashboard/jo
                       <path d="M12 4v12m0 0l-4-4m4 4l4-4" strokeLinecap="round" strokeLinejoin="round" />
                       <path d="M4 18v1a2 2 0 002 2h12a2 2 0 002-2v-1" strokeLinecap="round" />
                     </svg>
-                    Download as PDF
+                    Download FBD as PDF
+                  </a>
+                  <a
+                    href={`/api/jobs/${job.id}/output/${viewerIndex}/pdf?mode=reports`}
+                    className="inline-flex items-center gap-2 rounded-lg border border-ink-600 px-3.5 py-2 text-xs font-semibold text-mist-200 transition-colors hover:border-signal-500/60 hover:text-mist-100"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M7 3h7l4 4v14H7z" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M14 3v4h4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    Download reports as PDF
                   </a>
                 </div>
               ) : null}

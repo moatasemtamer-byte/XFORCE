@@ -20,7 +20,11 @@ public sealed class CfbNode
     public bool IsMini => IsStreamWithData && Data.Length < CfbConstants.MiniStreamCutoff;
 }
 
-/// <summary>Writes a valid OLE/CFB 3 (512-byte sectors) document. Deterministic, self-contained.</summary>
+/// <summary>
+/// Writes a valid OLE/CFB document. Deterministic, self-contained.
+/// Defaults to CFB v4 (4096-byte sectors) to match TriStation 5.8.0 exports;
+/// pass <see cref="CfbConstants.SectorShift"/> to emit legacy v3 (512-byte sectors).
+/// </summary>
 public sealed class CompoundFileWriter
 {
     private readonly List<CfbNode> _flat = new();
@@ -35,10 +39,27 @@ public sealed class CompoundFileWriter
     private int _totalSectors;
     private uint[] _fat = Array.Empty<uint>();
 
-    public static void Write(string outputPath, IEnumerable<(string Path, byte[] Data)> streams)
+    private readonly ushort _sectorShift;
+    private readonly int _sectorSize;
+    private readonly int _entriesPerFatSector;
+    private readonly int _entriesPerDifatSector;
+
+    public CompoundFileWriter(ushort sectorShift = CfbConstants.V4SectorShift)
+    {
+        _sectorShift = sectorShift;
+        _sectorSize = 1 << sectorShift;
+        _entriesPerFatSector = _sectorSize / 4;
+        _entriesPerDifatSector = _entriesPerFatSector - 1;
+    }
+
+    /// <summary>Byte offset of a data sector: sector N begins at (N+1)*SectorSize.</summary>
+    private long SectorOffset(long sector) => (sector + 1) * _sectorSize;
+
+    public static void Write(string outputPath, IEnumerable<(string Path, byte[] Data)> streams,
+        ushort sectorShift = CfbConstants.V4SectorShift)
     {
         var root = BuildTree(streams);
-        new CompoundFileWriter().WriteFile(outputPath, root);
+        new CompoundFileWriter(sectorShift).WriteFile(outputPath, root);
     }
 
     public static CfbNode BuildTree(IEnumerable<(string Path, byte[] Data)> streams)
@@ -83,20 +104,20 @@ public sealed class CompoundFileWriter
         {
             if (!node.IsStreamWithData) continue;
             if (node.IsMini) miniSectors += SectorCount(node.Data.Length, CfbConstants.MiniSectorSize);
-            else dataSectors += SectorCount(node.Data.Length, CfbConstants.SectorSize);
+            else dataSectors += SectorCount(node.Data.Length, _sectorSize);
         }
         miniBytes = (long)miniSectors * CfbConstants.MiniSectorSize;
-        dataSectors += SectorCount(miniBytes, CfbConstants.SectorSize);
+        dataSectors += SectorCount(miniBytes, _sectorSize);
 
-        int dirSectors = SectorCount(_flat.Count * 128, CfbConstants.SectorSize);
-        int miniFatSectors = miniSectors == 0 ? 0 : SectorCount(miniSectors * 4, CfbConstants.SectorSize);
+        int dirSectors = SectorCount(_flat.Count * 128, _sectorSize);
+        int miniFatSectors = miniSectors == 0 ? 0 : SectorCount(miniSectors * 4, _sectorSize);
 
         int fat = 1, difat = 0;
         while (true)
         {
             int total = dataSectors + dirSectors + miniFatSectors + fat + difat;
-            int f = SectorCount(total * 4, CfbConstants.SectorSize);
-            int df = f > 109 ? SectorCount(f - 109, 127) : 0;
+            int f = SectorCount(total * 4, _sectorSize);
+            int df = f > 109 ? SectorCount(f - 109, _entriesPerDifatSector) : 0;
             if (f == fat && df == difat) break;
             fat = f;
             difat = df;
@@ -120,7 +141,7 @@ public sealed class CompoundFileWriter
         foreach (var node in _flat)
         {
             if (!node.IsStreamWithData || node.IsMini) continue;
-            int n = SectorCount(node.Data.Length, CfbConstants.SectorSize);
+            int n = SectorCount(node.Data.Length, _sectorSize);
             node.StartSector = (uint)nextSector;
             node.Size = (ulong)node.Data.Length;
             regular[node] = ((uint)nextSector, n);
@@ -131,7 +152,7 @@ public sealed class CompoundFileWriter
         if (miniBytes > 0)
         {
             miniStart = (uint)nextSector;
-            LinkChain(ref nextSector, SectorCount(miniBytes, CfbConstants.SectorSize));
+            LinkChain(ref nextSector, SectorCount(miniBytes, _sectorSize));
             _root.StartSector = miniStart;
             _root.Size = (ulong)miniBytes;
         }
@@ -191,29 +212,34 @@ public sealed class CompoundFileWriter
         }
 
         // ---- mini FAT bytes ----
-        byte[] miniFatBytes = new byte[_miniFatSectors * CfbConstants.SectorSize];
+        byte[] miniFatBytes = new byte[_miniFatSectors * _sectorSize];
         for (int i = 0; i < _numMiniSectors; i++)
             BinaryPrimitives.WriteUInt32LittleEndian(miniFatBytes.AsSpan(i * 4), miniFat[i]);
 
         // ---- FAT bytes ----
-        byte[] fatBytes = new byte[_fatSectors * CfbConstants.SectorSize];
+        byte[] fatBytes = new byte[_fatSectors * _sectorSize];
         for (int i = 0; i < _fat.Length; i++)
             BinaryPrimitives.WriteUInt32LittleEndian(fatBytes.AsSpan(i * 4), _fat[i]);
 
         // ---- directory entries ----
-        byte[] dirBytes = new byte[_dirSectors * CfbConstants.SectorSize];
+        byte[] dirBytes = new byte[_dirSectors * _sectorSize];
         SerializeDirectories(dirBytes);
 
         // ---- assemble file ----
-        long fileSize = CfbConstants.HeaderSize + (long)_totalSectors * CfbConstants.SectorSize;
+        // The 512-byte header occupies the first sector-sized block, so the data
+        // sectors begin at offset _sectorSize (SectorCount==1 for the header).
+        long dataStart = _sectorSize;
+        long fileSize = dataStart + (long)_totalSectors * _sectorSize;
         var file = new byte[fileSize];
         Span<byte> h = file;
         CfbConstants.Signature.CopyTo(file, 0);
         BinaryPrimitives.WriteUInt16LittleEndian(h.Slice(24), 0x003E);
-        BinaryPrimitives.WriteUInt16LittleEndian(h.Slice(26), 0x0003);
+        ushort majorVersion = _sectorSize >= CfbConstants.V4SectorSize ? (ushort)4 : (ushort)3;
+        BinaryPrimitives.WriteUInt16LittleEndian(h.Slice(26), majorVersion);
         BinaryPrimitives.WriteUInt16LittleEndian(h.Slice(28), 0xFFFE);
-        h[30] = 9;
+        h[30] = (byte)_sectorShift;
         h[32] = 6;
+        BinaryPrimitives.WriteInt32LittleEndian(h.Slice(40), majorVersion == 4 ? _dirSectors : 0);
         BinaryPrimitives.WriteInt32LittleEndian(h.Slice(44), _fatSectors);
         BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(48), dirStart);
         BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(56), 4096);
@@ -233,19 +259,19 @@ public sealed class CompoundFileWriter
             int pos = 109;
             for (int s = 0; s < _difatSectors; s++)
             {
-                long o = CfbConstants.HeaderSize + (long)difatStarts[s] * CfbConstants.SectorSize;
-                var sec = file.AsSpan((int)o, CfbConstants.SectorSize);
+                long o = SectorOffset(difatStarts[s]);
+                var sec = file.AsSpan((int)o, _sectorSize);
                 int written = 0;
-                while (written < 127 && pos < _fatSectors)
+                while (written < _entriesPerDifatSector && pos < _fatSectors)
                 {
                     BinaryPrimitives.WriteUInt32LittleEndian(sec.Slice(written * 4), fatStarts[pos]);
                     written++;
                     pos++;
                 }
-                for (int i = written; i < 127; i++)
+                for (int i = written; i < _entriesPerDifatSector; i++)
                     BinaryPrimitives.WriteUInt32LittleEndian(sec.Slice(i * 4), CfbConstants.FreeSect);
                 uint next = (s == _difatSectors - 1) ? CfbConstants.EndOfChain : difatStarts[s + 1];
-                BinaryPrimitives.WriteUInt32LittleEndian(sec.Slice(127 * 4), next);
+                BinaryPrimitives.WriteUInt32LittleEndian(sec.Slice(_entriesPerDifatSector * 4), next);
             }
         }
 
@@ -467,22 +493,22 @@ public sealed class CompoundFileWriter
             var (start, count) = kv.Value;
             for (int i = 0; i < count; i++)
             {
-                long dst = CfbConstants.HeaderSize + (long)(start + i) * CfbConstants.SectorSize;
-                int len = Math.Min(CfbConstants.SectorSize, node.Data.Length - i * CfbConstants.SectorSize);
-                Array.Copy(node.Data, i * CfbConstants.SectorSize, file, dst, len);
+                long dst = SectorOffset(start + i);
+                int len = Math.Min(_sectorSize, node.Data.Length - i * _sectorSize);
+                Array.Copy(node.Data, i * _sectorSize, file, dst, len);
             }
         }
     }
 
-    private static void CopyToFile(byte[] file, byte[] src, uint startSector, int totalBytes)
+    private void CopyToFile(byte[] file, byte[] src, uint startSector, int totalBytes)
     {
         if (totalBytes <= 0 || startSector == CfbConstants.EndOfChain) return;
-        int n = (totalBytes + CfbConstants.SectorSize - 1) / CfbConstants.SectorSize;
+        int n = (totalBytes + _sectorSize - 1) / _sectorSize;
         for (int i = 0; i < n; i++)
         {
-            long dst = CfbConstants.HeaderSize + (long)(startSector + i) * CfbConstants.SectorSize;
-            int len = Math.Min(CfbConstants.SectorSize, totalBytes - i * CfbConstants.SectorSize);
-            Array.Copy(src, i * CfbConstants.SectorSize, file, dst, len);
+            long dst = SectorOffset(startSector + i);
+            int len = Math.Min(_sectorSize, totalBytes - i * _sectorSize);
+            Array.Copy(src, i * _sectorSize, file, dst, len);
         }
     }
 

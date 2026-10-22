@@ -1,4 +1,5 @@
-﻿using TriconexToTia.Core.Enums;
+﻿using System.Text.RegularExpressions;
+using TriconexToTia.Core.Enums;
 using TriconexToTia.Core.Interfaces;
 using TriconexToTia.Core.Models;
 using TriconexToTia.Core.Results;
@@ -36,6 +37,11 @@ public sealed class ConversionEngine
                 FatalError = $"Failed to parse the source XML: {exception.Message}",
             };
         }
+
+        // A TriStation EXTERN POU whose body declares a TYPE is a UDT, not a block (the San Martin
+        // TR_POINT_INFO struct). It must become a data type so references to it resolve, and the
+        // placeholder block must not be emitted.
+        ExtractTypeDeclarations(project);
 
         var blockRenames = NormalizeBlockNames(project);
 
@@ -174,6 +180,12 @@ public sealed class ConversionEngine
             .Concat(project.Blocks.Select(block => block.Name))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // A project that ships its own copy of a library function the mapping rule inlines (the San
+        // Martin SCALE function) would emit a duplicate definition that TIA rejects, because the name
+        // collides with the SCALE instruction. The calls are inlined by the rule, so the block is
+        // dropped; the name stays in userTypes above so the call site still resolves to the rule.
+        DropInlinedDuplicateBlocks(project, mappings);
+
         // The FBD pin type of every callee formal. A TriStation diagram can wire the same signal
         // with different types in different programs, so the type the pin expects is needed to
         // convert the wired value into the type the project-wide tag actually declares.
@@ -190,6 +202,12 @@ public sealed class ConversionEngine
                 Status = ConversionStatus.Converted,
                 SourceLine = block.SourceLine,
             });
+
+            // A TriStation ST block keeps its VAR declarations inside the CDATA body instead of the
+            // XML interface, so those variables are absent from block.Variables at this point. Fold
+            // them in now so their types are mapped with everything else; SclGenerator dedupes them
+            // again when it emits, so the mapped type is what reaches Siemens.
+            FoldTextualDeclarations(block);
 
             foreach (var variable in block.Variables)
             {
@@ -223,8 +241,21 @@ public sealed class ConversionEngine
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var call in logic.Items.OfType<BlockCall>())
                 {
-                    MapCall(call, block.Name, mappings, result, block.SourceLine, seen.Add(call.TypeName));
+                    MapCall(call, block.Name, mappings, result, block.SourceLine, seen.Add(call.TypeName), userTypes);
                     ApplyFormalTypes(call, formalTypes);
+                }
+            }
+            else if (block.Logic is TextualLogic textual && !string.IsNullOrWhiteSpace(textual.Code))
+            {
+                // A structured (FBD) call goes through MapCall above; a call written as ST text does
+                // not, so a rule that replaces the whole call with an inline expression (e.g.
+                // TIME_TO_SECS_REAL) has to be substituted in the text here. The block's own
+                // definition is unaffected because it does not call itself.
+                var rewritten = RewriteInlineCalls(textual.Code, mappings, projectNames: userTypes);
+                if (!ReferenceEquals(rewritten, textual.Code) && rewritten != textual.Code)
+                {
+                    block.Code = rewritten;
+                    block.Logic = new TextualLogic(textual.Language, rewritten);
                 }
             }
         }
@@ -278,6 +309,80 @@ public sealed class ConversionEngine
     /// safely. Programs (OBs) are never called, so they always rename.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Adds the declarations embedded in a TriStation text block's body to its variable list so that
+    /// the type-mapping pass sees them. Blocks whose interface is already populated are untouched.
+    /// </summary>
+    private static void FoldTextualDeclarations(PlcBlock block)
+    {
+        if (block.Logic is not TextualLogic textual || string.IsNullOrWhiteSpace(textual.Code)) return;
+
+        var unwrapped = SclCodeTransformer.UnwrapBlock(textual.Code);
+        if (unwrapped is null || unwrapped.Declarations.Count == 0) return;
+
+        var known = new HashSet<string>(
+            block.Variables.Select(variable => variable.Name),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var declaration in unwrapped.Declarations)
+        {
+            if (!known.Add(declaration.Name)) continue;
+            block.Variables.Add(new Variable
+            {
+                Name = declaration.Name,
+                TypeName = declaration.Type,
+                Direction = declaration.Direction,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Moves a <c>TYPE ... STRUCT ... END_TYPE</c> declaration out of a TriStation POU body into the
+    /// project's data types and removes the placeholder POU. The export sometimes ships a UDT as a
+    /// function block whose whole body is the type declaration (TR_POINT_INFO); TIA rejects the
+    /// block but needs the type.
+    /// </summary>
+    private static void ExtractTypeDeclarations(PlcProject project)
+    {
+        var typePattern = new Regex(
+            @"\bTYPE\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:STRUCT)?(?<body>.*?)\bEND_STRUCT\s*;?\s*(?:END_TYPE)?",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var memberPattern = new Regex(
+            @"^\s*(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?<type>[A-Za-z_][A-Za-z0-9_]*)",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
+
+        project.Blocks.RemoveAll(block =>
+        {
+            if (block.Logic is not TextualLogic textual || string.IsNullOrWhiteSpace(textual.Code))
+            {
+                return false;
+            }
+
+            var match = typePattern.Match(textual.Code);
+            if (!match.Success) return false;
+
+            var name = match.Groups["name"].Value;
+            if (project.DataTypes.Any(type => string.Equals(type.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            var structType = new StructType { Name = name, SourceLine = block.SourceLine };
+            foreach (Match member in memberPattern.Matches(match.Groups["body"].Value))
+            {
+                structType.Members.Add(new Variable
+                {
+                    Name = member.Groups["name"].Value,
+                    TypeName = member.Groups["type"].Value,
+                    Direction = VariableDirection.Local,
+                });
+            }
+
+            project.DataTypes.Add(structType);
+            return true;
+        });
+    }
+
     private static List<BlockRename> NormalizeBlockNames(PlcProject project)
     {
         var renames = new List<BlockRename>();
@@ -294,11 +399,34 @@ public sealed class ConversionEngine
             .Select(logic => logic.Code)
             .ToList();
 
+        // A TriStation EXTERN POU is a stand-in for a library function. The export names every one
+        // of them "EXTERN" and keeps the name the caller uses only in the code header
+        // ("* FUNCTION:        ReportBadParam"), so suffixing them EXTERN_1..N leaves every SCL
+        // call site referring to a function that does not exist. Rename each stand-in to the name
+        // from its header instead.
+        var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var preferred = new Dictionary<PlcBlock, string>();
+        foreach (var block in project.Blocks)
+        {
+            if (!TryLibraryFunctionName(block, out var libraryName)) continue;
+            if (reserved.Contains(libraryName) || !claimed.Add(libraryName)) continue;
+            preferred[block] = libraryName;
+        }
+
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var block in project.Blocks)
         {
             var name = block.Name.Trim();
             if (name.Length == 0) continue;
+
+            if (preferred.TryGetValue(block, out var libraryName))
+            {
+                renames.Add(new BlockRename(name, libraryName, block.SourceLine));
+                block.Name = libraryName;
+                used.Add(libraryName);
+                continue;
+            }
+
             if (used.Add(name)) continue;
 
             if (textualCode.Any(code => ContainsWord(code, name)))
@@ -321,8 +449,12 @@ public sealed class ConversionEngine
 
         if (renames.Count == 0) return renames;
 
-        var lookup = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var rename in renames) lookup[rename.Original] = rename.Renamed;
+        // Several stand-ins share the original name "EXTERN", so an original name that was renamed
+        // more than once cannot be mapped back to a single target; those calls stay as they are.
+        var lookup = renames
+            .GroupBy(rename => rename.Original, StringComparer.Ordinal)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.First().Renamed, StringComparer.Ordinal);
 
         foreach (var block in project.Blocks)
         {
@@ -335,6 +467,28 @@ public sealed class ConversionEngine
 
         return renames;
     }
+
+    /// <summary>
+    /// Reads the real library function name out of the doc header of an EXTERN stand-in, e.g.
+    /// <c>* FUNCTION:        ReportBadParam</c>. Only accepted when the name is a plain identifier,
+    /// so nothing is renamed to something that cannot be a Siemens block name.
+    /// </summary>
+    private static bool TryLibraryFunctionName(PlcBlock block, out string libraryName)
+    {
+        libraryName = string.Empty;
+        if (string.IsNullOrWhiteSpace(block.Code)) return false;
+
+        var match = LibraryFunctionHeader().Match(block.Code);
+        if (!match.Success) return false;
+
+        var name = match.Groups["name"].Value;
+        libraryName = name;
+        return true;
+    }
+
+    private static Regex LibraryFunctionHeader() => new(
+        @"(?m)^\s*\*?\s*FUNCTION:\s*(?<name>[A-Za-z_][A-Za-z0-9_]*)",
+        RegexOptions.Compiled);
 
     private static bool ContainsWord(string text, string word)
     {
@@ -447,6 +601,41 @@ public sealed class ConversionEngine
     }
 
     /// <summary>
+    /// Removes a project function that re-declares a library function the mapping rule expands
+    /// inline, when nothing refers to it as a block. The rule rewrites every FBD call, so the
+    /// project copy is redundant and would otherwise collide with a Siemens instruction of the same
+    /// name (SCALE). A block still named by SCL text is kept, because the text path cannot inline
+    /// it and dropping it would break the reference.
+    /// </summary>
+    private static void DropInlinedDuplicateBlocks(PlcProject project, Mappings mappings)
+    {
+        var inlineNames = mappings.LibraryFunctions
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Value.Inline))
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (inlineNames.Count == 0) return;
+
+        project.Blocks.RemoveAll(block =>
+            block.BlockType == BlockType.FC
+            && inlineNames.Contains(block.Name)
+            && !project.Blocks.Any(other =>
+                !ReferenceEquals(other, block)
+                && other.Logic is TextualLogic otherText
+                && ContainsWord(StripComments(otherText.Code), block.Name)));
+    }
+
+    /// <summary>
+    /// Removes SCL comments (<c>(* *)</c> and <c>//</c>) so a name mentioned only in prose is not
+    /// mistaken for a reference to a block.
+    /// </summary>
+    private static string StripComments(string code)
+    {
+        var stripped = Regex.Replace(code, @"\(\*.*?\*\)", " ", RegexOptions.Singleline);
+        return Regex.Replace(stripped, @"//[^\r\n]*", " ");
+    }
+
+    /// <summary>
     /// Applies one library-function rule to a FBD call: the Siemens name the emitter must emit,
     /// whether the call is a stateless function (inlined) or an instance, the formal renames and
     /// value conversions the rule carries, and — for a rule with no Siemens equivalent — a manual
@@ -460,8 +649,23 @@ public sealed class ConversionEngine
         Mappings mappings,
         MappingResult result,
         int sourceLine,
-        bool record)
+        bool record,
+        IReadOnlyCollection<string> projectNames)
     {
+        // A project that defines its own block under a library name (San Martin ships RS and SR as
+        // real TriStation function blocks) calls that block, so the library rule must not rename
+        // the call or its instance type to the stand-in. An inline function rule is the exception:
+        // the project's SCALE function is the same function the rule expands, so its calls are
+        // inlined and the project's duplicate definition is dropped rather than emitted.
+        if (projectNames.Contains(call.TypeName))
+        {
+            if (!mappings.LibraryFunctions.TryGetValue(call.TypeName, out var named)
+                || string.IsNullOrWhiteSpace(named.Inline))
+            {
+                return;
+            }
+        }
+
         if (!mappings.LibraryFunctions.TryGetValue(call.TypeName, out var rule)) return;
 
         var status = Mappings.ParseStatus(rule.Status);
@@ -568,5 +772,48 @@ public sealed class ConversionEngine
             });
         }
     }
+
+    /// <summary>
+    /// Replaces calls written as ST text with the inline expression of their library rule, e.g.
+    /// <c>TIME_TO_SECS_REAL(#DELTAT)</c> becomes <c>DINT_TO_REAL(TIME_TO_DINT(#DELTAT)) / 1000.0</c>.
+    /// The FBD path does this through the emitter; text the export already supplies as ST would
+    /// otherwise keep a call Siemens does not know. Only single-argument inline rules are expanded,
+    /// which is all the current rules with an inline expression but a placeholder-free variable list
+    /// (the multi-argument PACK16/SCALE rules are only reached from FBD). A name the project defines
+    /// as its own block is left untouched.
+    /// </summary>
+    private static string RewriteInlineCalls(
+        string code,
+        Mappings mappings,
+        IReadOnlyCollection<string> projectNames)
+    {
+        if (string.IsNullOrEmpty(code)) return code;
+
+        return InlineCallPattern().Replace(code, match =>
+        {
+            var name = match.Groups["name"].Value;
+            if (projectNames.Contains(name)) return match.Value;
+            if (!mappings.LibraryFunctions.TryGetValue(name, out var rule)) return match.Value;
+            if (string.IsNullOrWhiteSpace(rule.Inline)) return match.Value;
+            if (match.Groups["args"].Value.Contains('(', StringComparison.Ordinal)) return match.Value;
+
+            var inline = rule.Inline!;
+            var arguments = match.Groups["args"].Value.Split(',');
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                var placeholder = i == 0 ? "IN1" : "IN" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                inline = inline.Replace("{" + placeholder + "}", arguments[i].Trim(), StringComparison.Ordinal);
+            }
+
+            // A rule whose placeholders are not all positional (INPUT, MIN1, ...) is addressed by
+            // name, which a text call does not carry; leave it for the FBD path.
+            if (inline.Contains('{', StringComparison.Ordinal)) return match.Value;
+            return inline;
+        });
+    }
+
+    private static Regex InlineCallPattern() => new(
+        @"(?<![\w.""#])(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?<args>[^()]*)\)",
+        RegexOptions.Compiled);
 }
 

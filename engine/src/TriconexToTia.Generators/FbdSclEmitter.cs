@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using TriconexToTia.Core.Enums;
@@ -26,6 +27,9 @@ public sealed class FbdSclEmitter
     private readonly HashSet<string> _localNamesSet;
     private readonly HashSet<string> _parameterNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _parameterTypes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The declared type of every local of the block, input and output included.</summary>
+    private readonly Dictionary<string, string> _localTypes = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyCollection<string> _dbGlobalNames;
     private readonly IReadOnlyDictionary<string, string> _globalTypes;
     private readonly string? _dbQualifier;
@@ -61,6 +65,14 @@ public sealed class FbdSclEmitter
             .Select(variable => variable.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _localNames = _localNamesSet;
+
+        // The declared type of every local, so a pin of the block itself (MAX_EU, MAX_FAIL_RAW)
+        // can be typed the same way a global tag can.
+        foreach (var variable in localList)
+        {
+            if (string.IsNullOrWhiteSpace(variable.EffectiveTypeName)) continue;
+            _localTypes[variable.Name] = variable.EffectiveTypeName;
+        }
 
         // Output and in-out pins are "parameters": TIA warns when one is read before it is
         // assigned, so a self-referential assignment has to be routed through a hold variable.
@@ -392,12 +404,19 @@ public sealed class FbdSclEmitter
     {
         var typeName = call.MappedTypeName ?? call.TypeName;
 
+        // An instruction whose pins carry no type still reads one: LIMIT's IN is a Real when its
+        // MN is. Passing it down keeps an undriven input from defaulting to Bool.
+        var previousAmbient = _ambientType;
+        _ambientType = MathInputType(typeName) ?? TypeOfInferredResult(call);
+
         var arguments = new List<string>();
         foreach (var argument in call.Inputs.Concat(call.InOuts))
         {
             if (argument.Sources.Count == 0) continue;
-            arguments.Add(RenderArgument(argument));
+            arguments.Add(RenderArgument(argument, MathInputType(typeName)));
         }
+
+        _ambientType = previousAmbient;
 
         var omitted = call.Inputs.Concat(call.InOuts).Count(argument => argument.Sources.Count == 0);
         if (omitted > 0)
@@ -458,7 +477,7 @@ public sealed class FbdSclEmitter
             // positionally with the wired value.
             if (IsConversion(typeName))
             {
-                var values = WiredValues(call);
+                var values = WiredValues(call, ConversionInputType(typeName));
                 var converted = $"{typeName}({string.Join(", ", values)})";
                 converted = CoerceToTarget(bindings[0].RawTarget, converted, bindings[0].SiteType);
                 return $"{bindings[0].Target} := {converted};{Describe(call)}";
@@ -559,19 +578,34 @@ public sealed class FbdSclEmitter
 
     private static readonly HashSet<string> EdgeTypes = new(StringComparer.OrdinalIgnoreCase) { "R_TRIG", "F_TRIG" };
 
-    private string RenderArgument(CallArgument argument)
+    private string RenderArgument(CallArgument argument, string? expectedType = null)
     {
         var name = argument.MappedFormalParameter ?? argument.FormalParameter;
-        var value = RenderValue(argument);
+        var value = RenderValue(argument, expectedType);
 
         return string.IsNullOrWhiteSpace(name) ? value : $"{name} := {value}";
     }
 
-    /// <summary>The value of one formal: every wired signal, converted if the rule asks for it.</summary>
-    private string RenderValue(CallArgument argument)
+    /// <summary>
+    /// The type an IEC math instruction always reads. Their single input is declared Real, but a
+    /// TriStation diagram wires the pin without a type, so an undriven input would default to Bool
+    /// and <c>SQRT(FALSE)</c> would not compile.
+    /// </summary>
+    private static string? MathInputType(string typeName) =>
+        MathFunctions.Contains(typeName) ? "Real" : null;
+
+    private static readonly HashSet<string> MathFunctions = new(StringComparer.OrdinalIgnoreCase)
     {
+        "SQRT", "LN", "LOG", "EXP", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN",
+        "ASINH", "ACOSH", "ATANH", "SQR", "EXPT",
+    };
+
+    /// <summary>The value of one formal: every wired signal, converted if the rule asks for it.</summary>
+    private string RenderValue(CallArgument argument, string? expectedType = null)
+    {
+        var type = expectedType ?? argument.ExpectedType;
         var rendered = argument.Sources
-            .Select(source => RenderSource(source, argument.ExpectedType))
+            .Select(source => RenderSource(source, type))
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .ToList();
         if (rendered.Count == 0) return "<unspecified>";
@@ -626,9 +660,72 @@ public sealed class FbdSclEmitter
         if (output?.ExpectedType is not null) return output.ExpectedType;
 
         // A single-output block whose output formal is unnamed still pins the type it produces.
-        if (producer.Outputs.Count == 1) return producer.Outputs[0].ExpectedType;
+        if (producer.Outputs.Count == 1 && producer.Outputs[0].ExpectedType is not null)
+        {
+            return producer.Outputs[0].ExpectedType;
+        }
 
-        return null;
+        // A pin that reads the very call being rendered carries no result type at all: the formal
+        // is an input of that call, so the call's own type would be circular -- and for a
+        // comparison it would wrongly type the open input as the Bool the comparison produces.
+        // Any other consumer is reading the call's result, which LIMIT names after its IN pin.
+        var readsOwnInput = string.Equals(_renderingKey, producer.SheetKey, StringComparison.Ordinal)
+            && producer.Inputs.Concat(producer.InOuts).Any(argument =>
+                string.Equals(argument.FormalParameter, formalParameter, StringComparison.OrdinalIgnoreCase));
+        if (readsOwnInput) return null;
+
+        // Nothing declares the type, but a call that renders as an expression still produces one:
+        // it inherits the type of its own operands. An instance is left alone -- its pins are real
+        // and guessing would wrap INSTANCE.Q in a conversion it does not need.
+        return RendersAsExpression(producer) ? TypeOfInferredResult(producer) : null;
+    }
+
+    /// <summary>True when the call's result is an expression rather than a member of an instance.</summary>
+    private static bool RendersAsExpression(BlockCall call) =>
+        call.IsFunction
+        || !string.IsNullOrWhiteSpace(call.Operator)
+        || !string.IsNullOrWhiteSpace(call.InlineExpression)
+        || MirroredInstructions.Contains(call.MappedTypeName ?? call.TypeName);
+
+    /// <summary>
+    /// Instructions that return whatever their input carries, so a consumer can be typed from them
+    /// even though the call is emitted as an instruction rather than an expression.
+    /// </summary>
+    private static readonly HashSet<string> MirroredInstructions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "LIMIT", "MIN", "MAX", "SEL", "MUX",
+    };
+
+    /// <summary>Operators whose result is always a Bool whatever their operands carry.</summary>
+    private static readonly HashSet<string> BoolOperators = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "=", "<>", ">", ">=", "<", "<=", "AND", "OR", "XOR", "NOT", "EQ", "NE", "GE", "GT", "LE", "LT",
+    };
+
+    /// <summary>Guards <see cref="TypeOfInferredResult"/> against a cycle of calls feeding each other.</summary>
+    private readonly HashSet<string> _typeResolving = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The type a call produces when nothing declares it. A comparison or logic operator is always
+    /// Bool; every other instruction produces whatever its own inputs carry, so <c>LIMIT</c> reads
+    /// as Real when its <c>IN</c> is Real and <c>SUB</c> as Real when its <c>IN1</c> is Real.
+    /// </summary>
+    private string? TypeOfInferredResult(BlockCall call)
+    {
+        var name = string.IsNullOrWhiteSpace(call.Operator) ? call.TypeName : call.Operator;
+        if (BoolOperators.Contains(name)) return "Bool";
+
+        if (!_typeResolving.Add(call.SheetKey)) return null;
+        try
+        {
+            return call.Inputs.Concat(call.InOuts)
+                .Select(TypeOfOperand)
+                .FirstOrDefault(type => !string.IsNullOrWhiteSpace(type));
+        }
+        finally
+        {
+            _typeResolving.Remove(call.SheetKey);
+        }
     }
 
     private static CallArgument? FindOutput(BlockCall call, string? formalParameter)
@@ -659,8 +756,27 @@ public sealed class FbdSclEmitter
             return "Bool";
         }
 
+        // A literal the diagram wires in still has a type: 4095.0 is a Real, 819 an integer. Without
+        // it every operand of an arithmetic template made only of undriven inputs is untyped and
+        // falls back to Bool.
+        if (LiteralType(trimmed) is { } literalType) return literalType;
+
         var name = BareName(expression.Trim());
-        return _globalTypes.TryGetValue(name, out var tagType) ? tagType : null;
+        if (_globalTypes.TryGetValue(name, out var tagType)) return tagType;
+
+        // A pin of the block itself (MAX_EU, MAX_FAIL_RAW) is a local, not a tag; without this an
+        // operand of an arithmetic template has no type at all and its cut cycle falls back to Bool.
+        return _localTypes.TryGetValue(name, out var localType) ? localType : null;
+    }
+
+    /// <summary>The type of a plain literal, e.g. <c>4095.0</c> is a Real and <c>819</c> an Int.</summary>
+    private static string? LiteralType(string text)
+    {
+        if (text.Length == 0 || text.StartsWith('"')) return null;
+        if (text.StartsWith("T#", StringComparison.OrdinalIgnoreCase)) return "Time";
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _)) return null;
+
+        return text.Contains('.') || text.Contains('E') || text.Contains('e') ? "Real" : "Int";
     }
 
     private static string BareName(string name)
@@ -683,6 +799,12 @@ public sealed class FbdSclEmitter
     /// </summary>
     private static string? Coerce(string value, string? fromType, string? toType)
     {
+        // A plain literal is accepted wherever its type is, so converting it would only add noise.
+        if (double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+        {
+            return null;
+        }
+
         var from = TypeToken(fromType);
         var to = TypeToken(toType);
         if (from is null || to is null || from == to) return null;
@@ -710,11 +832,38 @@ public sealed class FbdSclEmitter
     /// </summary>
     private string RenderInlineCall(BlockCall call)
     {
+        var arguments = WiredArguments(call)
+            .Where(argument => !string.IsNullOrWhiteSpace(argument.FormalParameter))
+            .ToList();
+
+        // A placeholder carries no type of its own, so an input that ends in a cut cycle has nothing
+        // to fall back on and defaults to Bool, which an arithmetic template then rejects
+        // ("Operator '-' is not compatible with the data types of 'Bool' and 'Bool'"). The other
+        // placeholders of the same template do know their type, so borrow it and pass it down so a
+        // nested call inherits it as well.
+        var previous = _ambientType;
+        var previousKey = _renderingKey;
+        _renderingKey = call.SheetKey;
+        _ambientType = arguments
+            .Select(TypeOfOperand)
+            .FirstOrDefault(type => !string.IsNullOrWhiteSpace(type))
+            // An IEC math instruction always reads a Real even though its pin carries no type.
+            ?? MathInputType(call.MappedTypeName ?? call.TypeName)
+            ?? _ambientType;
+
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var argument in call.Inputs.Concat(call.InOuts))
+        try
         {
-            if (argument.Sources.Count == 0 || string.IsNullOrWhiteSpace(argument.FormalParameter)) continue;
-            values[argument.FormalParameter] = RenderValue(argument);
+            foreach (var argument in arguments)
+            {
+                values[argument.FormalParameter!] =
+                    RenderValue(argument, TypeOfOperand(argument) ?? _ambientType);
+            }
+        }
+        finally
+        {
+            _ambientType = previous;
+            _renderingKey = previousKey;
         }
 
         var missing = new List<string>();
@@ -740,29 +889,87 @@ public sealed class FbdSclEmitter
         ? BlockOutput(source.RefSheetNumber, source.RefLocalId!, source.RefFormalParameter, expectedType)
         : Qualify(source.Expression ?? string.Empty);
 
-    /// <summary>Every wired input value of a call, in wiring order.</summary>
-    private List<string> WiredValues(BlockCall call) =>
-        call.Inputs.Concat(call.InOuts)
-            .Where(argument => argument.Sources.Count > 0)
-            .Select(RenderValue)
-            .ToList();
-
     /// <summary>TIA names its conversion functions with <c>_TO_</c>; those never take a named formal.</summary>
     private static bool IsConversion(string name) =>
         name.Contains("_TO_", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The type an operand inherits while an infix operator is rendered. The pins of an operator
+    /// carry no declared type, so this is the only thing that can type an input whose wire ends in
+    /// a cut cycle; it is threaded through the recursion so a nested operator inherits it too.
+    /// </summary>
+    private string? _ambientType;
+
+    /// <summary>The call whose expression is being built, so a pin that reads it can be spotted.</summary>
+    private string? _renderingKey;
+
     /// <summary>An infix operator expression built from the call's wired inputs.</summary>
     private string RenderOperatorCall(BlockCall call)
     {
-        var values = WiredValues(call);
-        if (values.Count == 0)
+        var arguments = WiredArguments(call);
+        if (arguments.Count == 0)
         {
             return $"<{call.TypeName}: no input is connected>";
         }
 
-        if (values.Count == 1) return $"({values[0]})";
-        return $"({string.Join($" {call.Operator} ", values)})";
+        // An operator's pins carry no declared type, so an input that ends in a cut cycle has
+        // nothing to fall back on and defaults to Bool, which the arithmetic then rejects
+        // ("Operator '-' is not compatible with the data types of 'Bool' and 'Bool'"). The other
+        // operand of the same operator does know its type, so borrow it for the whole expression;
+        // it is passed down so a nested operator inherits it as well.
+        var previous = _ambientType;
+        var previousKey = _renderingKey;
+        _renderingKey = call.SheetKey;
+        _ambientType = arguments
+            .Select(TypeOfOperand)
+            .FirstOrDefault(type => !string.IsNullOrWhiteSpace(type)) ?? _ambientType;
+        try
+        {
+            var values = arguments
+                .Select((argument, index) => RenderValue(argument, TypeOfOperand(argument) ?? _ambientType))
+                .ToList();
+
+            if (values.Count == 1) return $"({values[0]})";
+            return $"({string.Join($" {call.Operator} ", values)})";
+        }
+        finally
+        {
+            _ambientType = previous;
+            _renderingKey = previousKey;
+        }
     }
+
+    /// <summary>Every wired input of a call that carries a signal, in wiring order.</summary>
+    private static List<CallArgument> WiredArguments(BlockCall call) =>
+        call.Inputs.Concat(call.InOuts)
+            .Where(argument => argument.Sources.Count > 0)
+            .ToList();
+
+    /// <summary>Every wired input value of a call, in wiring order.</summary>
+    private List<string> WiredValues(BlockCall call, string? expectedType = null)
+    {
+        var arguments = WiredArguments(call);
+        if (arguments.Count == 0) return new List<string>();
+
+        var ambient = expectedType ?? _ambientType;
+        return arguments
+            .Select(argument => RenderValue(argument, TypeOfOperand(argument) ?? ambient))
+            .ToList();
+    }
+
+    /// <summary>The type a conversion function reads, from its own name: DINT_TO_REAL reads a DInt.</summary>
+    private static string? ConversionInputType(string typeName)
+    {
+        var separator = typeName.IndexOf("_TO_", StringComparison.OrdinalIgnoreCase);
+        return separator <= 0 ? null : typeName[..separator];
+    }
+
+    /// <summary>The type of one operand: what its pin declares, else what the wired signal carries.</summary>
+    private string? TypeOfOperand(CallArgument argument) =>
+        argument.ExpectedType
+            ?? argument.Sources
+                .Select(TypeOfSignal)
+                .FirstOrDefault(type => !string.IsNullOrWhiteSpace(type));
 
     /// <summary>
     /// Assigns one shared expression to every result binding. A target that the expression itself
@@ -833,14 +1040,31 @@ public sealed class FbdSclEmitter
             return "<unspecified>";
         }
 
+        // A pin that reads the very call whose expression is being built is an undriven input: the
+        // diagram never feeds it. Re-entering the call here would nest a full copy of its own
+        // expression inside itself, e.g. (SP >= (SP >= 0.0)) for a comparison with an open input.
+        if (string.Equals(key, _renderingKey, StringComparison.Ordinal))
+        {
+            _notes.Add(
+                $"sheet {sheet} localId {localId}: input {formalParameter ?? "(unnamed)"} is not driven and " +
+                "reads its own block; a default was substituted. Check the affected signals by hand.");
+            return DefaultValueFor(call, expectedType);
+        }
+
         // A function's output is inlined at its consumer, so a feedback cycle would recurse without
         // end. Cut the cycle at the first repeated key and flag it rather than overflowing the stack.
         if (!_resolving.Add(key))
         {
-            // A TriStation feedback wire means the consumer reads the signal's value from the
-            // previous scan. The variable the cut output is bound to keeps its value across scans,
-            // so reading it reproduces the feedback without recursing.
-            if (_assignmentsByCall.TryGetValue(key, out var bindings) && bindings.Count > 0)
+            // A wire that loops back into the very pin being read is an undriven input: the diagram
+            // never feeds it, so there is no previous-scan value to restore and a typed default is
+            // all that can stand in for it. Only a loop that leaves an output pin is real feedback,
+            // and that value is kept in the variable the output is assigned to.
+            var readsOwnInput = call.Inputs.Concat(call.InOuts).Any(argument =>
+                string.Equals(argument.FormalParameter, formalParameter, StringComparison.OrdinalIgnoreCase));
+
+            if (!readsOwnInput
+                && _assignmentsByCall.TryGetValue(key, out var bindings)
+                && bindings.Count > 0)
             {
                 var retained = Qualify(bindings[0].Target);
                 _notes.Add(
@@ -867,7 +1091,7 @@ public sealed class FbdSclEmitter
     }
 
     /// <summary>A compile-safe default for a cut signal, typed from its producing block.</summary>
-    private static string DefaultValueFor(BlockCall call, string? expectedType)
+    private string DefaultValueFor(BlockCall call, string? expectedType)
     {
         var type = expectedType;
         if (string.IsNullOrWhiteSpace(type))
@@ -877,7 +1101,10 @@ public sealed class FbdSclEmitter
                 .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text)) ?? call.ResultType;
         }
 
-        if (type is null) return "FALSE";
+        // Nothing about the wire itself says the type, but the operator the value feeds does.
+        if (string.IsNullOrWhiteSpace(type)) type = _ambientType;
+
+        if (string.IsNullOrWhiteSpace(type)) return "FALSE";
         return type.ToUpperInvariant() switch
         {
             "BOOL" => "FALSE",
@@ -918,14 +1145,25 @@ public sealed class FbdSclEmitter
         // TIA conversion functions reject the named IN1 formal, so they are always called positionally.
         if (IsConversion(typeName))
         {
-            return $"{typeName}({string.Join(", ", WiredValues(call))})";
+            return $"{typeName}({string.Join(", ", WiredValues(call, ConversionInputType(typeName)))})";
         }
 
-        var arguments = call.Inputs.Concat(call.InOuts)
-            .Where(argument => argument.Sources.Count > 0)
-            .Select(RenderArgument)
-            .ToList();
-        return arguments.Count == 0 ? typeName + "()" : $"{typeName}({string.Join(", ", arguments)})";
+        // An instruction whose pins carry no type still reads one: LIMIT's IN is a Real when its
+        // MN is. Passing it down keeps an undriven input from defaulting to Bool.
+        var previousAmbient = _ambientType;
+        _ambientType = MathInputType(typeName) ?? TypeOfInferredResult(call);
+        try
+        {
+            var arguments = call.Inputs.Concat(call.InOuts)
+                .Where(argument => argument.Sources.Count > 0)
+                .Select(argument => RenderArgument(argument, MathInputType(typeName)))
+                .ToList();
+            return arguments.Count == 0 ? typeName + "()" : $"{typeName}({string.Join(", ", arguments)})";
+        }
+        finally
+        {
+            _ambientType = previousAmbient;
+        }
     }
 
     private string InstanceOf(BlockCall call)

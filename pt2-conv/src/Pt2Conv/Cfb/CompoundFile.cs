@@ -129,7 +129,7 @@ public sealed class CompoundFile
             int difatCount = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(72));
             for (int d = 0; d < difatCount && IsOrdinary(nextDifat); d++)
             {
-                long o = (long)nextDifat * SectorSize + SectorSize;
+                long o = SectorOffset(nextDifat);
                 int perSector = SectorSize / 4;
                 for (int i = 0; i < perSector - 1; i++)
                 {
@@ -142,7 +142,7 @@ public sealed class CompoundFile
             foreach (uint s in difat)
             {
                 DifatSectors.Add(s);
-                long o = (long)s * SectorSize + SectorSize;
+                long o = SectorOffset(s);
                 if (o + SectorSize > data.Length) continue;
                 for (int i = 0; i < SectorSize / 4 && fatIdx < _fat.Length; i++, fatIdx++)
                     _fat[fatIdx] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan((int)o + i * 4));
@@ -238,6 +238,12 @@ public sealed class CompoundFile
         return list.ToArray();
     }
 
+    /// <summary>
+    /// Byte offset of a sector's data. The 512-byte header is padded to one full
+    /// sector, so sector N (v3 or v4) begins at (N+1)*SectorSize.
+    /// </summary>
+    private long SectorOffset(long sector) => (sector + 1) * SectorSize;
+
     private byte[] ReadChain(uint startSector, long expectedSize)
     {
         // If the chain belongs to the mini stream, sectors are *regular* sectors of the root chain.
@@ -248,7 +254,7 @@ public sealed class CompoundFile
         var buf = new byte[expectedSize];
         for (int i = 0; i < chain.Length; i++)
         {
-            long o = (long)chain[i] * SectorSize + SectorSize;
+            long o = SectorOffset(chain[i]);
             int n = (int)Math.Min(SectorSize, expectedSize - (long)i * SectorSize);
             Array.Copy(_data, o, buf, i * SectorSize, n);
         }
@@ -260,7 +266,7 @@ public sealed class CompoundFile
         var buf = new byte[(long)chain.Length * SectorSize];
         for (int i = 0; i < chain.Length; i++)
         {
-            long o = (long)chain[i] * SectorSize + SectorSize;
+            long o = SectorOffset(chain[i]);
             Array.Copy(_data, o, buf, (long)i * SectorSize, SectorSize);
         }
         return buf;
@@ -305,7 +311,7 @@ public sealed class CompoundFile
         var data = new byte[e.StreamSize];
         for (int i = 0; i < chain.Length; i++)
         {
-            long o = (long)chain[i] * SectorSize + SectorSize;
+            long o = SectorOffset(chain[i]);
             int n = (int)Math.Min(SectorSize, (long)e.StreamSize - (long)i * SectorSize);
             Array.Copy(_data, o, data, (long)i * SectorSize, n);
         }

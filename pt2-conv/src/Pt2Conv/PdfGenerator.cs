@@ -6,11 +6,12 @@ namespace Pt2Conv;
 /// <summary>
 /// Draws a decompiled TriStation FBD project to a PDF.
 ///
-/// This is a straight port of the geometry in the web viewer's FBD sheet
-/// (<c>src/components/engine/fbd-sheet.tsx</c>): the drawing frame with zone ticks,
-/// the synthesised title block, then blocks / terminals / wires / comments at the
-/// raw export coordinates. Sheet units are the container's own units (1 unit = 1 pt),
-/// so a size-D sheet is a 3270 x 2070 pt page.
+/// The sheet geometry comes from the container's own sheet template
+/// (<c>Current/Elements/SheetTemplate*&#47;*.BKG</c>): the template holds the title block
+/// (a full and a compact variant) and the frame band, so the sheet size is the
+/// template's extent plus the 30 unit frame. Everything is drawn in those sheet
+/// units (y down, like the container) and scaled onto a Letter page, the way
+/// TriStation prints: a size D sheet is 3300 x 2100 units.
 ///
 /// Pure managed drawing (PdfSharpCore): no TriStation, no licence, no native deps,
 /// so it runs anywhere the tool runs -- including Linux on the engine host.
@@ -23,12 +24,13 @@ public static class PdfGenerator
     private static readonly XColor FrameColor = XColor.FromArgb(0x4B, 0x55, 0x63);
     private static readonly XColor PinDot = XColor.FromArgb(0x1F, 0x29, 0x37);
 
-    private static readonly XPen Ink1 = new(Ink, 1.0);
-    private static readonly XPen Ink075 = new(Ink, 0.75);
-    private static readonly XPen Ink15 = new(Ink, 1.5);
-    private static readonly XPen WirePen = new(WireColor, 1.5) { LineJoin = XLineJoin.Round, LineCap = XLineCap.Round };
-    private static readonly XPen Frame1 = new(FrameColor, 1.0);
-    private static readonly XPen Frame15 = new(FrameColor, 1.5);
+    // TriStation draws every line 0.5 pt wide on the sheet (1.6 sheet units).
+    private static readonly XPen Ink1 = new(Ink, 1.6);
+    private static readonly XPen Ink075 = new(Ink, 1.2);
+    private static readonly XPen Ink15 = new(Ink, 1.6);
+    private static readonly XPen WirePen = new(WireColor, 1.6) { LineJoin = XLineJoin.Round, LineCap = XLineCap.Round };
+    private static readonly XPen Frame1 = new(FrameColor, 1.6);
+    private static readonly XPen Frame15 = new(FrameColor, 1.6);
     private static readonly XBrush WhiteBrush = new XSolidBrush(XColors.White);
     private static readonly XBrush InkBrush = new XSolidBrush(Ink);
     private static readonly XBrush PinBrush = new XSolidBrush(PinDot);
@@ -38,14 +40,25 @@ public static class PdfGenerator
     // Points -> user units (the SVG uses the same 96/72 factor).
     private const double Pt = 96.0 / 72.0;
 
+    // The frame band between the sheet's edge and the drawing area.
+    private const double FrameMargin = 30;
+    // The page: US Letter, landscape for a landscape sheet.
+    private const double PageW = 792, PageH = 612;
+    private const double PageMargin = 9;
+
+    /// <summary>The row letters of the frame, from the bottom up. TriStation doubles the
+    /// last letter once the sequence runs out (8 rows: A..G and HH).</summary>
+    private const string RowLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+
     private sealed record SheetSize(double W, double H, double TitleW, double TitleH);
 
+    // The sheet sizes of the standard templates (the frame band included).
     private static readonly Dictionary<string, SheetSize> SheetSizes = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["A"] = new(990, 732, 318, 96),
-        ["B"] = new(1576, 976, 296, 96),
-        ["C"] = new(2070, 1570, 423, 156),
-        ["D"] = new(3270, 2070, 1014, 280),
+        ["A"] = new(1020, 762, 318, 96),
+        ["B"] = new(1606, 1006, 296, 96),
+        ["C"] = new(2100, 1600, 423, 156),
+        ["D"] = new(3300, 2100, 1014, 280),
     };
 
     private static SheetSize SizeOf(PdfDrawing d)
@@ -59,7 +72,19 @@ public static class PdfGenerator
     public static void Write(PdfProject project, string outPath)
     {
         var doc = new PdfDocument();
-        doc.Info.Title = string.IsNullOrWhiteSpace(project.Name) ? "TriStation FBD" : project.Name;
+        DrawInto(doc, project);
+        doc.Save(outPath);
+    }
+
+    /// <summary>
+    /// Draws the project's FBD sheets (or the ST/text fallback) into an existing document,
+    /// appending after whatever pages it already holds. Used to combine FBD sheets and the
+    /// report suite into a single PDF without a page-import/merge step.
+    /// </summary>
+    public static void DrawInto(PdfDocument doc, PdfProject project)
+    {
+        if (string.IsNullOrWhiteSpace(doc.Info.Title))
+            doc.Info.Title = string.IsNullOrWhiteSpace(project.Name) ? "TriStation FBD" : project.Name;
         doc.Info.Creator = "pt2conv";
 
         bool any = false;
@@ -78,30 +103,48 @@ public static class PdfGenerator
         {
             DrawTextPages(doc, project);
         }
-
-        doc.Save(outPath);
     }
 
     // ---- one FBD sheet ------------------------------------------------------
 
     private static void DrawSheet(PdfDocument doc, PdfProject project, PdfPou pou, PdfSheet sheet)
     {
-        var size = SizeOf(pou.Drawing);
+        // The template of the drawing drives the sheet geometry; the built-in table is
+        // the fallback for containers without the template streams.
+        var tpl = TemplateFor(project, pou);
+        var fallback = SizeOf(pou.Drawing);
+        double sheetW = tpl != null && tpl.SheetW > 0 ? tpl.SheetW : fallback.W;
+        double sheetH = tpl != null && tpl.SheetH > 0 ? tpl.SheetH : fallback.H;
+
+        bool portrait = sheetH > sheetW;
+        double pageW = portrait ? PageH : PageW;
+        double pageH = portrait ? PageW : PageH;
+        double scale = Math.Min((pageW - 2 * PageMargin) / sheetW, (pageH - 2 * PageMargin) / sheetH);
+        double offsetX = (pageW - sheetW * scale) / 2;
+        double offsetY = (pageH - sheetH * scale) / 2;
+
         var page = doc.AddPage();
-        page.Width = XUnit.FromPoint(size.W);
-        page.Height = XUnit.FromPoint(size.H);
+        page.Width = XUnit.FromPoint(pageW);
+        page.Height = XUnit.FromPoint(pageH);
 
         using var gfx = XGraphics.FromPdfPage(page);
+        gfx.TranslateTransform(offsetX, offsetY);
+        gfx.ScaleTransform(scale, scale);
 
-        DrawFrame(gfx, pou.Drawing, size);
-        DrawTitleBlock(gfx, project, pou, sheet, size);
+        DrawFrame(gfx, pou.Drawing, sheetW, sheetH);
+        DrawTitleBlock(gfx, project, pou, sheet, tpl);
+
+        // The FBD content lives in the drawing area, which starts one frame band
+        // below the top edge of the sheet.
+        gfx.Save();
+        gfx.TranslateTransform(0, FrameMargin);
 
         var behind = new List<PdfCommentElem>();
         var front = new List<PdfCommentElem>();
         foreach (var c in sheet.Elems.OfType<PdfCommentElem>())
             (c.BehindLogic ? behind : front).Add(c);
 
-        foreach (var c in behind) DrawComment(gfx, c, front: false);
+        foreach (var c in behind) DrawComment(gfx, c, false);
         foreach (var w in sheet.Wires) DrawWire(gfx, w);
         foreach (var e in sheet.Elems)
         {
@@ -111,57 +154,195 @@ public static class PdfGenerator
                 case PdfVarElem v: DrawTerminal(gfx, v); break;
             }
         }
-        foreach (var c in front) DrawComment(gfx, c, front: true);
+        foreach (var c in front) DrawComment(gfx, c, true);
+
+        gfx.Restore();
+    }
+
+    /// <summary>The sheet template of a drawing (e.g. "SheetTemplateD").</summary>
+    private static SheetTemplate? TemplateFor(PdfProject project, PdfPou pou)
+    {
+        string name = pou.Drawing.SheetTemplate;
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        if (project.Templates.TryGetValue(name, out var tpl)) return tpl;
+        // The drawing may name the size instead of the template ("SheetTemplateD" vs "D").
+        foreach (var (key, value) in project.Templates)
+        {
+            if (key.Equals(name, StringComparison.OrdinalIgnoreCase)) return value;
+            if (key.EndsWith(pou.Drawing.Size ?? "", StringComparison.OrdinalIgnoreCase)
+                && (pou.Drawing.Size ?? "").Length > 0) return value;
+        }
+        return null;
     }
 
     // ---- frame --------------------------------------------------------------
 
-    private static void DrawFrame(XGraphics gfx, PdfDrawing drawing, SheetSize size)
+    private static void DrawFrame(XGraphics gfx, PdfDrawing drawing, double sheetW, double sheetH)
     {
-        double m = Math.Round(size.W * (30.0 / 3270.0));
+        double m = FrameMargin;
         int hz = Math.Max(1, drawing.HZones <= 0 ? 16 : drawing.HZones);
         int vz = Math.Max(1, drawing.VZones <= 0 ? 8 : drawing.VZones);
-        double innerW = size.W - 2 * m;
-        double innerH = size.H - 2 * m;
-        double colW = innerW / hz;
+        double innerW = sheetW - 2 * m;
+        double innerH = sheetH - 2 * m;
+        // TriStation insets the column grid by 4 units on each side, so the two outer
+        // columns are a little wider than the ones in between.
+        double colW = (innerW - 8) / hz;
         double rowH = innerH / vz;
-        const string letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-        double labelSize = m * 0.6;
 
-        gfx.DrawRectangle(Frame15, WhiteBrush, 0.75, 0.75, size.W - 1.5, size.H - 1.5);
+        gfx.DrawRectangle(Frame15, WhiteBrush, 0, 0, sheetW, sheetH);
         gfx.DrawRectangle(Frame1, m, m, innerW, innerH);
 
         for (int i = 1; i < hz; i++)
         {
-            double x = m + i * colW;
+            double x = m + 4 + i * colW;
             gfx.DrawLine(Frame1, x, 0, x, m);
-            gfx.DrawLine(Frame1, x, size.H - m, x, size.H);
+            gfx.DrawLine(Frame1, x, sheetH - m, x, sheetH);
         }
         for (int i = 1; i < vz; i++)
         {
             double y = m + i * rowH;
             gfx.DrawLine(Frame1, 0, y, m, y);
-            gfx.DrawLine(Frame1, size.W - m, y, size.W, y);
+            gfx.DrawLine(Frame1, sheetW - m, y, sheetW, y);
         }
 
-        var font = new XFont(FontFamily, labelSize);
+        // The zone numbers run from right to left (1 in the rightmost column) and are
+        // centred in their column, in the top and the bottom band.
+        var font = new XFont(FontFamily, LabelFontSize);
         for (int i = 0; i < hz; i++)
         {
-            double x = m + (i + 0.5) * colW;
-            DrawCentered(gfx, (i + 1).ToString(), font, FrameBrush, x, m / 2);
-            DrawCentered(gfx, (i + 1).ToString(), font, FrameBrush, x, size.H - m / 2);
+            double cx = (ColumnStart(i, m, colW) + ColumnStart(i + 1, m, colW)) / 2;
+            string number = (hz - i).ToString();
+            DrawCentered(gfx, number, font, FrameBrush, cx, m / 2);
+            DrawCentered(gfx, number, font, FrameBrush, cx, sheetH - m / 2);
         }
+
+        // The row letters run from the bottom up. TriStation doubles the letter once
+        // the plain sequence runs out (8 rows: A..G and HH) and leaves the top cell of
+        // the right hand band empty.
         for (int i = 0; i < vz; i++)
         {
-            double y = m + (i + 0.5) * rowH;
-            string ch = i < letters.Length ? letters[i].ToString() : "";
-            DrawCentered(gfx, ch, font, FrameBrush, m / 2, y);
-            DrawCentered(gfx, ch, font, FrameBrush, size.W - m / 2, y);
+            double y = m + (i + 0.5) * rowH;   // i = 0 is the top row
+            string ch = RowLetter(vz - 1 - i);
+            if (ch.Length == 0) continue;
+            DrawRowLabel(gfx, ch, font, FrameBrush, m / 2, y);
+            if (i > 0) DrawRowLabel(gfx, ch, font, FrameBrush, sheetW - m / 2, y);
         }
     }
 
+    /// <summary>The left edge of a frame column (the outer columns are 4 units wider).</summary>
+    private static double ColumnStart(int column, double margin, double colW)
+        => margin + (column == 0 ? 0 : 4 + column * colW);
+
+    /// <summary>The row label of a row, counted from the bottom. TriStation doubles the
+    /// letter when the row count exceeds the plain letter sequence.</summary>
+    private static string RowLetter(int rowFromBottom)
+    {
+        if (rowFromBottom < 0) return "";
+        string ch = RowLetters[Math.Min(rowFromBottom, RowLetters.Length - 1)].ToString();
+        return rowFromBottom < 7 ? ch : ch + ch;
+    }
+
+    /// <summary>The size of the frame labels (the zone numbers and the row letters).</summary>
+    private const double LabelFontSize = 19.03;
+
     // ---- title block --------------------------------------------------------
 
+    /// <summary>The font size of a template text, in sheet units. TriStation's template
+    /// sizes are points on the printed sheet; the sizes seen in a TriStation print are
+    /// 13, 16, 19, 25 and 33 units for 10, 12, 14, 18 and 24 points.</summary>
+    private static double FontUnits(double templateSize)
+    {
+        if (FontUnitSizes.TryGetValue(templateSize, out double units)) return units;
+        return Math.Max(4, 1.5 * templateSize - 2);
+    }
+
+    private static readonly Dictionary<double, double> FontUnitSizes = new()
+    {
+        [10] = 13, [12] = 16, [14] = 19, [18] = 25, [24] = 33,
+    };
+
+    /// <summary>Draws the title block of the sheet template. The first sheet of the print
+    /// carries the full variant, the others the compact one (the way TriStation prints).</summary>
+    private static void DrawTitleBlock(XGraphics gfx, PdfProject project, PdfPou pou, PdfSheet sheet, SheetTemplate? tpl)
+    {
+        if (tpl == null || tpl.Backgrounds.Count == 0)
+        {
+            DrawFallbackTitleBlock(gfx, project, pou, sheet);
+            return;
+        }
+
+        int bg = sheet.GlobalNumber <= 1 ? 0 : 1;
+        if (bg >= tpl.Backgrounds.Count) bg = tpl.Backgrounds.Count - 1;
+        var elems = tpl.Backgrounds[bg];
+
+        foreach (var e in elems)
+            if (e.Box) gfx.DrawRectangle(Ink1, e.X, e.Y, e.W, e.H);
+
+        foreach (var e in elems)
+        {
+            if (e.Text.Length == 0) continue;
+            string text = e.ExpandMacros ? ExpandMacros(e.Text, sheet) : e.Text;
+            if (text.Trim().Length == 0) continue;
+            DrawTemplateText(gfx, e, text);
+        }
+    }
+
+    /// <summary>Draws one template text. TriStation prints the title block texts top
+    /// aligned: the baseline sits about one ascent below the top of the text box. A
+    /// text that does not fit the cell is wrapped over several lines (TriStation never
+    /// scales the font down).</summary>
+    private static void DrawTemplateText(XGraphics gfx, TemplateElem e, string text)
+    {
+        double fontUnits = FontUnits(e.Size);
+        var font = new XFont(FontFamily, fontUnits);
+        double maxWidth = Math.Max(10, e.W - 10);
+
+        var lines = new List<string>();
+        foreach (var raw in text.Replace("\r\n", "\n").Split('\n'))
+            WrapLine(gfx, raw.Trim(), font, maxWidth, lines);
+
+        double baseline = e.Y + 0.966 * fontUnits;
+        double step = 1.17 * fontUnits;
+        foreach (var line in lines)
+        {
+            if (line.Length > 0)
+            {
+                var size = gfx.MeasureString(line, font);
+                double x = e.Align == "Center" ? e.X + e.W / 2 - size.Width / 2
+                         : e.Align == "Right" ? e.X + e.W - 5 - size.Width
+                         : e.X + 5;
+                gfx.DrawString(line, font, InkBrush, x, baseline);
+            }
+            baseline += step;
+        }
+    }
+
+    /// <summary>Splits one line of a template text into the lines that fit the cell.</summary>
+    private static void WrapLine(XGraphics gfx, string text, XFont font, double maxWidth, List<string> lines)
+    {
+        if (text.Length == 0) { lines.Add(""); return; }
+        string current = "";
+        foreach (var word in text.Split(' '))
+        {
+            string candidate = current.Length == 0 ? word : current + " " + word;
+            if (current.Length > 0 && gfx.MeasureString(candidate, font).Width > maxWidth)
+            {
+                lines.Add(current);
+                current = word;
+            }
+            else current = candidate;
+        }
+        lines.Add(current);
+    }
+
+    /// <summary>Expands the title block macros of a sheet.</summary>
+    private static string ExpandMacros(string text, PdfSheet sheet)
+    {
+        foreach (var (key, value) in sheet.Macros) text = text.Replace(key, value);
+        return System.Text.RegularExpressions.Regex.Replace(text, "%[A-Z0-9_]+", "").Trim();
+    }
+
+    // The title block of a size D sheet, used when the container has no template.
     private static readonly (double x, double y, double w, double h)[] TbBoxes =
     {
         (0, 0, 395, 280),
@@ -209,52 +390,24 @@ public static class PdfGenerator
         (397, 257, 615, 23, "Left", 14, "%ELEMENT_NAME"),
     };
 
-    private static void DrawTitleBlock(XGraphics gfx, PdfProject project, PdfPou pou, PdfSheet sheet, SheetSize size)
+    /// <summary>The synthesised title block used when the container has no template.</summary>
+    private static void DrawFallbackTitleBlock(XGraphics gfx, PdfProject project, PdfPou pou, PdfSheet sheet)
     {
-        double bx = size.W - size.TitleW;
-        double by = size.H - size.TitleH;
-        double sx = size.TitleW / 1014.0;
-        double sy = size.TitleH / 280.0;
-
-        var vars = new Dictionary<string, string>
-        {
-            ["%PROJECT_NAME"] = project.Name,
-            ["%DRAWING_TITLE"] = pou.Drawing.Title,
-            ["%DRAWING_NUMBER"] = pou.Drawing.Number,
-            ["%DRAWING_SIZE"] = pou.Drawing.Size,
-            ["%REVISION"] = pou.Drawing.Rev,
-            ["%SHEET_TEMPLATE"] = pou.Drawing.SheetTemplate,
-            ["%SHEET_TITLE"] = string.IsNullOrWhiteSpace(sheet.Title) ? pou.Title : sheet.Title,
-            ["%SHEET_NUMBER"] = sheet.Number.ToString(),
-            ["%SHEET_COUNT"] = pou.Sheets.Count.ToString(),
-            ["%ELEMENT_NAME"] = pou.Name,
-        };
+        var size = SizeOf(pou.Drawing);
+        double bx = size.W - FrameMargin - size.TitleW;
+        double by = size.H - FrameMargin - size.TitleH;
 
         gfx.DrawRectangle(WhiteBrush, bx, by, size.TitleW, size.TitleH);
-
         foreach (var (x, y, w, h) in TbBoxes)
-            gfx.DrawRectangle(Ink1, bx + x * sx, by + y * sy, w * sx, h * sy);
+            gfx.DrawRectangle(Ink1, bx + x, by + y, w, h);
 
         foreach (var (x, y, w, h, align, sz, text) in TbLabels)
         {
-            string expanded = ExpandTb(text, vars);
-            if (string.IsNullOrWhiteSpace(expanded)) continue;
-            double fs = sz * Pt * sx;
-            var font = new XFont(FontFamily, fs);
-            bool center = align == "Center";
-            double cx = bx + (center ? x + w / 2 : x + 3) * sx;
-            double cy = by + (y + h / 2) * sy;
-            DrawTextBaseline(gfx, expanded, font, InkBrush, cx, cy, center);
+            string expanded = ExpandMacros(text, sheet);
+            if (expanded.Length == 0) continue;
+            var elem = new TemplateElem { X = bx + x, Y = by + y, W = w, H = h, Align = align, Size = sz };
+            DrawTemplateText(gfx, elem, expanded);
         }
-    }
-
-    private static string ExpandTb(string text, Dictionary<string, string> vars)
-    {
-        string outText = text;
-        foreach (var (k, v) in vars) outText = outText.Replace(k, v);
-        outText = System.Text.RegularExpressions.Regex.Replace(outText, "%[A-Z0-9_]+", "");
-        outText = System.Text.RegularExpressions.Regex.Replace(outText, "\\s{2,}", " ");
-        return outText.Trim();
     }
 
     // ---- wires --------------------------------------------------------------
@@ -288,16 +441,16 @@ public static class PdfGenerator
         if (!e.IsFunction)
             gfx.DrawLine(Ink075, e.X, e.Y + header - 4, e.X + e.W, e.Y + header - 4);
 
-        var nameFont = new XFont(FontFamily, 13, XFontStyle.Bold);
+        var nameFont = new XFont(FontFamily, 16, XFontStyle.Bold);
         DrawCentered(gfx, label, nameFont, InkBrush, e.X + e.W / 2, e.Y + (e.IsFunction ? 26 : 22));
 
         if (!string.IsNullOrEmpty(sub))
         {
-            var subFont = new XFont(FontFamily, 12);
+            var subFont = new XFont(FontFamily, 13);
             DrawCentered(gfx, sub, subFont, InkBrush, e.X + e.W / 2, e.Y + 46);
         }
 
-        var pinFont = new XFont(FontFamily, 12);
+        var pinFont = new XFont(FontFamily, 11);
         for (int i = 0; i < e.Inputs.Count; i++)
         {
             double py = BlockPinY(e, i);
@@ -333,7 +486,7 @@ public static class PdfGenerator
             DrawDot(gfx, e.X - 10, e.Y + 10, 2.2);
         }
 
-        var nameFont = new XFont(FontFamily, 12, XFontStyle.Bold);
+        var nameFont = new XFont(FontFamily, 13, XFontStyle.Bold);
         DrawCentered(gfx, e.Name, nameFont, InkBrush, e.X + e.W / 2, e.Y + e.H / 2);
 
         if (e.Annotate && !string.IsNullOrWhiteSpace(e.Annotation))
@@ -358,7 +511,7 @@ public static class PdfGenerator
         if (dbl)
             gfx.DrawRectangle(Ink1, e.X + 3, e.Y + 3, Math.Max(0, e.W - 6), Math.Max(0, e.H - 6));
 
-        double fontSize = Math.Max(6, (e.TextSize <= 0 ? 10 : e.TextSize) * Pt);
+        double fontSize = FontUnits(e.TextSize <= 0 ? 10 : e.TextSize);
         var font = new XFont(FontFamily, fontSize);
         var lines = WrapComment(e.Text, Math.Max(20, e.W - 8), fontSize);
         bool center = e.Align == "Center";
@@ -442,16 +595,18 @@ public static class PdfGenerator
     private static void DrawDot(XGraphics gfx, double cx, double cy, double r)
         => gfx.DrawEllipse(PinBrush, cx - r, cy - r, r * 2, r * 2);
 
+    /// <summary>Draws a text centred in a point (both axes).</summary>
     private static void DrawCentered(XGraphics gfx, string text, XFont font, XBrush brush, double cx, double cy)
     {
         var sz = gfx.MeasureString(text, font);
-        gfx.DrawString(text, font, brush, cx - sz.Width / 2, cy + sz.Height * 0.35);
+        gfx.DrawString(text, font, brush, cx - sz.Width / 2, cy + 0.35 * font.Size);
     }
 
-    private static void DrawTextBaseline(XGraphics gfx, string text, XFont font, XBrush brush, double x, double cy, bool center)
+    /// <summary>Draws a row label in a frame band. TriStation centres a doubled letter
+    /// as if it were a single one, so the second letter sticks out of the band.</summary>
+    private static void DrawRowLabel(XGraphics gfx, string text, XFont font, XBrush brush, double cx, double cy)
     {
-        var sz = gfx.MeasureString(text, font);
-        double drawX = center ? x - sz.Width / 2 : x;
-        gfx.DrawString(text, font, brush, drawX, cy + sz.Height * 0.35);
+        var sz = gfx.MeasureString(text.Length > 1 ? text.Substring(0, 1) : text, font);
+        gfx.DrawString(text, font, brush, cx - sz.Width / 2, cy + 0.35 * font.Size);
     }
 }
