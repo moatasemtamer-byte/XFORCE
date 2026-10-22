@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using System.Xml;
+using TriconexToTia.Engine.Ladder;
 
 namespace TriconexToTia.Server;
 
@@ -39,7 +41,8 @@ public static class LadderPipeline
         Stream? dpt,
         Stream? template,
         Action<string>? reportStage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte[]? originalListing = null)
     {
         var report = new StringBuilder();
 
@@ -111,10 +114,6 @@ public static class LadderPipeline
                     "circuit-reader produced an empty equation listing.");
             }
 
-            var workbookPath = Path.Combine(work, "functions.xlsx");
-            BlFunctionsWorkbook.Write(equations, workbookPath);
-            report.AppendLine($"equations: {equations.Count}");
-
             var ladderCli = ResolveTool("MSW_LADDERCLI_PATH", new[]
             {
                 @"C:\XforceMsw\tools\BlLadderCli\bin\Release\net48\BlLadderCli.exe",
@@ -125,24 +124,21 @@ public static class LadderPipeline
                     "Could not find BlLadderCli. Set MSW_LADDERCLI_PATH to the executable.");
             }
 
-            var xmlPath = Path.Combine(work, "ladder.xml");
-            var cliArgs = new List<string>();
-            if (dptPath is not null) cliArgs.AddRange(new[] { "--dpt", dptPath });
-            cliArgs.AddRange(new[] { "--xlsx", workbookPath, "--out", xmlPath });
-            if (templatePath is not null && File.Exists(templatePath)) cliArgs.AddRange(new[] { "--template", templatePath });
+            // The categorized LPT carries `PROGRAM=<name>` on its network-header lines. When it
+            // does, each consecutive run of networks under one name becomes its own TriStation
+            // program: BL emits ONE program per run (named from a placeholder row), so we run BL
+            // once per group and merge the resulting POUs. Without the tags the listing is a
+            // single unnamed program and BL names it from its default.
+            var groups = BuildGroups(equations, originalListing, out var groupingNote);
+            report.AppendLine(groupingNote);
 
-            reportStage?.Invoke("ladder cli");
-            var (cliExit, cliOutput) = await RunAsync(ladderCli, cancellationToken, cliArgs.ToArray());
-            report.AppendLine(cliOutput);
-
-            if (cliExit != 0 || !File.Exists(xmlPath))
+            var xml = await RunBlAsync(ladderCli, work, equations, groups, dptPath, templatePath, report, reportStage, cancellationToken);
+            if (xml is null)
             {
                 return new Result(false, null, report.ToString(),
-                    $"BlLadderCli exited with code {cliExit} and produced no XML.");
+                    "BlLadderCli exited non-zero or produced no XML.");
             }
 
-            // Read the XML back before the workdir is torn down.
-            var xml = await File.ReadAllBytesAsync(xmlPath, cancellationToken);
             return new Result(true, xml, report.ToString(), null);
         }
         catch (Exception exception)
@@ -172,6 +168,171 @@ public static class LadderPipeline
             rows.Add((logic, network));
         }
         return rows;
+    }
+
+    // A single BL invocation: one workbook (optionally carrying a program-naming placeholder row),
+    // run once, one XML out.
+    private sealed record BlGroup(string? Name, List<(string Logic, string Network)> Rows);
+
+    /// <summary>
+    /// Splits the equation rows into TriStation programs using the <c>PROGRAM=</c> tags in the
+    /// original listing. Returns a single unnamed group when the listing is uncategorized.
+    /// </summary>
+    private static List<BlGroup> BuildGroups(
+        List<(string Logic, string Network)> equations, byte[]? originalListing, out string note)
+    {
+        if (originalListing is null || !LptProgramMap.HasProgramTags(originalListing))
+        {
+            note = "grouping: none (listing carries no PROGRAM= tags); one program";
+            return new List<BlGroup> { new(null, equations) };
+        }
+
+        var networkToProgram = LptProgramMap.NetworkToProgram(originalListing);
+        var groups = new List<BlGroup>();
+        string? current = null;
+        List<(string Logic, string Network)> bucket = new();
+
+        void Flush()
+        {
+            if (bucket.Count > 0) groups.Add(new BlGroup(current, bucket));
+            bucket = new();
+        }
+
+        foreach (var row in equations)
+        {
+            string? name = null;
+            if (int.TryParse(row.Network, out var n) && networkToProgram.TryGetValue(n, out var mapped))
+                name = mapped;
+
+            if (name is null)
+            {
+                // No program for this network: keep it with the run we are in.
+                bucket.Add(row);
+                continue;
+            }
+
+            if (!string.Equals(name, current, StringComparison.Ordinal))
+            {
+                Flush();
+                current = name;
+            }
+            bucket.Add(row);
+        }
+        Flush();
+
+        note = $"grouping: {groups.Count} program(s) from PROGRAM= tags";
+        return groups;
+    }
+
+    private static async Task<byte[]?> RunBlAsync(
+        string ladderCli,
+        string work,
+        List<(string Logic, string Network)> equations,
+        List<BlGroup> groups,
+        string? dptPath,
+        string? templatePath,
+        StringBuilder report,
+        Action<string>? reportStage,
+        CancellationToken cancellationToken)
+    {
+        // Fast path: no grouping. One workbook, one run (BL names the program itself).
+        if (groups.Count == 1 && groups[0].Name is null)
+        {
+            var wb = Path.Combine(work, "functions.xlsx");
+            BlFunctionsWorkbook.Write(equations, wb);
+            report.AppendLine($"equations: {equations.Count}");
+            return await RunOneAsync(ladderCli, wb, Path.Combine(work, "ladder.xml"), dptPath, templatePath, report, reportStage, cancellationToken);
+        }
+
+        var xmls = new List<byte[]>();
+        var names = new List<string>();
+        for (var i = 0; i < groups.Count; i++)
+        {
+            var group = groups[i];
+            var name = SanitizePouName(group.Name ?? ("PROGRAM_" + (i + 1)));
+            // The naming row: BL scans for a row whose text contains "Logic" and uses its first
+            // `@`-separated field as the program name (LadderTextOperations_safety.cs).
+            var rows = new List<(string Logic, string Network)>(group.Rows.Count + 1)
+            {
+                (name + "@Logic", "0"),
+            };
+            rows.AddRange(group.Rows);
+
+            var wb = Path.Combine(work, $"functions_{i}.xlsx");
+            BlFunctionsWorkbook.Write(rows, wb);
+            var xp = Path.Combine(work, $"ladder_{i}.xml");
+            var bytes = await RunOneAsync(ladderCli, wb, xp, dptPath, templatePath, report, reportStage, cancellationToken);
+            if (bytes is null) return null;
+            xmls.Add(bytes);
+            names.Add(name);
+            report.AppendLine($"group {i + 1}/{groups.Count}: {name} ({group.Rows.Count} rows)");
+        }
+
+        return MergeProgramXml(xmls, names);
+    }
+
+    private static async Task<byte[]?> RunOneAsync(
+        string ladderCli,
+        string workbookPath,
+        string xmlPath,
+        string? dptPath,
+        string? templatePath,
+        StringBuilder report,
+        Action<string>? reportStage,
+        CancellationToken cancellationToken)
+    {
+        var cliArgs = new List<string>();
+        if (dptPath is not null) cliArgs.AddRange(new[] { "--dpt", dptPath });
+        cliArgs.AddRange(new[] { "--xlsx", workbookPath, "--out", xmlPath });
+        if (templatePath is not null && File.Exists(templatePath)) cliArgs.AddRange(new[] { "--template", templatePath });
+
+        reportStage?.Invoke("ladder cli");
+        var (cliExit, cliOutput) = await RunAsync(ladderCli, cancellationToken, cliArgs.ToArray());
+        report.AppendLine(cliOutput);
+
+        if (cliExit != 0 || !File.Exists(xmlPath)) return null;
+        return await File.ReadAllBytesAsync(xmlPath, cancellationToken);
+    }
+
+    // BL emits the whole project template plus the one program it just built. To stitch several
+    // runs into one project we keep the first run's XML as the base (template + its program) and
+    // append the generated program POU from every later run. The generated POU is the one whose
+    // name matches the placeholder we fed in; template POUs (FBs, the shared TEMPLATES/P01_FB)
+    // are common to every run, so they are NOT copied again.
+    private static byte[] MergeProgramXml(List<byte[]> xmls, List<string> names)
+    {
+        if (xmls.Count == 0) return Array.Empty<byte>();
+        if (xmls.Count == 1) return xmls[0];
+
+        var baseDoc = new XmlDocument { PreserveWhitespace = true };
+        baseDoc.LoadXml(Encoding.UTF8.GetString(StripBom(xmls[0])));
+        var root = baseDoc.DocumentElement!;
+
+        for (var i = 1; i < xmls.Count; i++)
+        {
+            var doc = new XmlDocument { PreserveWhitespace = true };
+            doc.LoadXml(Encoding.UTF8.GetString(StripBom(xmls[i])));
+            foreach (XmlNode node in doc.DocumentElement!.SelectNodes("./*[local-name()='pou']")!)
+            {
+                var import = baseDoc.ImportNode(node, true);
+                root.AppendChild(import);
+            }
+        }
+
+        using var ms = new MemoryStream();
+        baseDoc.Save(ms);
+        return ms.ToArray();
+    }
+
+    private static byte[] StripBom(byte[] bytes)
+        => bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF
+            ? bytes[3..] : bytes;
+
+    private static string SanitizePouName(string name)
+    {
+        var cleaned = new string(name.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_').ToArray());
+        if (cleaned.Length == 0 || char.IsDigit(cleaned[0])) cleaned = "P_" + cleaned;
+        return cleaned;
     }
 
     // A TRISTATION DPT export always carries a tag table (its header names the dictionary and

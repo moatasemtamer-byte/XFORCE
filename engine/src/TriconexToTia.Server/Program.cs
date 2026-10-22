@@ -679,7 +679,7 @@ static async Task<(byte[]? Xml, string FileName, string LadderReport, string Imp
         await using var sourceStream = new MemoryStream(sourceBytes);
         await using var dptStream = form.Files.GetFile("dpt")?.OpenReadStream();
         await using var templateStream = form.Files.GetFile("template")?.OpenReadStream();
-        var ladder = await LadderPipeline.BuildXmlAsync(sourceStream, sourceName, dptStream, templateStream, reportStage, cancellationToken);
+        var ladder = await LadderPipeline.BuildXmlAsync(sourceStream, sourceName, dptStream, templateStream, reportStage, cancellationToken, rawBytes);
         if (!ladder.Success)
         {
             return (null, sourceName, string.Empty, string.Empty, Results.Json(
