@@ -338,8 +338,45 @@ the attribute away.
 (Exact in/out var class mapping must be confirmed per-direction: `inVariable` with only
 `connectionPointOut` = source; `outVariable`/`inOutVariable` with `connectionPointIn`.)
 
-## 3. Native library elements **(verified)**
+## 3. Print layout (`pt2conv topdf`) **(verified against the TriStation print)**
 
+`topdf` renders the container the way TriStation prints it. Rules that were measured
+on the reference print (`SULFUR1 (2)_OUT (1).pdf`) and re-checked on our own output:
+
+- **Page** — Letter landscape (792 x 612 pt), the sheet centred with a 9 pt margin.
+  The sheet is scaled to the page: `CTM = 0.2345455 0 0 0.2345455 9 59.7272727 cm`
+  for a D sheet (3300 x 2100 units). The scale is derived per sheet size
+  (A 1020x762, B 1606x1006, C 2100x1600, D 3300x2100).
+- **Frame** — the drawing area is inset 30 units on every side; the zone grid is inset
+  a further 4 units, the zone numbers run right to left, the row letters bottom to top
+  (`A..G, HH`), and the right hand band omits the top row label.
+- **Title block** — taken from the sheet template (`SheetTemplateD`): the full block
+  (`bg0`) is drawn on the global sheet 1 only, the compact block (`bg1`) afterwards.
+  All cells are drawn from the template; the macro values are expanded in place and are
+  **not** trimmed.
+- **Content** — the logic is drawn relative to the top-left corner of the drawing area
+  (the sheet's y + 30), the x is unchanged.
+- **Content style** (all sizes in sheet units, measured on the reference):
+  - instance block = a 19 unit strip with the instance name (13 pt, centred,
+    baseline strip top + 12.3) + 1 unit gap + a body with the type name (16 pt,
+    centred, baseline body top + 15.3); a function has no strip;
+  - pin row = body top + 39.8 + 20 per pin; input names 11 pt at `box.left + 3`
+    (baseline row - 3), output names 11 pt right aligned at `box.right - 3`
+    (baseline row + 8.3); an input pin is drawn as a T-bar at `x - 10.3` with a stub
+    to `x - 5.2` and a diagonal to the body, an output pin as a diagonal to
+    `box.right + 5.2` and a horizontal to `box.right + 10.3`;
+  - terminal = a 20 unit name box (inset 10 on both sides, 13 pt centred name,
+    baseline centre + 5.7) above an annotation area that spans the full element
+    width (13 pt text, first baseline area top + 12.6, 14 unit line spacing); the
+    pin is a 4.6 x 5.1 square drawn just outside the element;
+  - comments with a `Double` border draw a second rectangle inset by 5;
+  - the wire line itself carries no end marker - the pin symbol belongs to the element.
+- **Clipping** — the export coordinates start at the top-left corner of the drawing
+  area, so the usable height of template D is `2100 - 2 * 30 = 2040`; elements whose
+  bottom edge is below that are dropped by the TriStation editor and are dropped here
+  too (`FbdGenerator.IsClipped`).
+
+## 4. Native library elements **(verified)**
 Standard blocks/functions (`ADD`, `AND`, `BOOL`, `ABS`, `GT`, `EQ`, `NE`, `GE`, `LE`,
 `LN`, `DT`, ...) are stored as an **empty `.INL` stream (0 bytes) + `.INL_crc` (64 B)**.
 They have no generated body. Our builder was creating non-empty `.INL` streams for
@@ -347,7 +384,7 @@ these — that is wrong; emit 0-byte `.INL` + its SHA-256 `_crc`.
 
 `IST`/`ST`/`DOC` triples appear only for FB types that carry ST source (`AIN`, etc.).
 
-## 4. Remaining work / open questions
+## 5. Remaining work / open questions
 
 - [x] `PRIMARY_SPAN` formula: `offset == max primary localId` (2.5). Exact primary ids
       include unrecoverable edit-history gaps -> accepted deviation.
@@ -366,7 +403,7 @@ these — that is wrong; emit 0-byte `.INL` + its SHA-256 `_crc`.
 - [ ] Confirm empty trailing sheet rule.
 - [ ] Confirm sheettemplate C/D selection from XML `ts:SHEETS@Template`.
 
-## 5. Verification plan
+## 6. Verification plan
 
 Build `SULFUR1__2.xml` with the new builder, then:
 1. `pt2conv diff <good.pt2x> <ours.pt2x>` -> expect `changed=2` (only the two

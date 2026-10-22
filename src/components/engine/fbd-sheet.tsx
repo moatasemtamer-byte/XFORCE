@@ -86,6 +86,7 @@ export interface InspectWire {
 
 export interface InspectSheet {
   number: number;
+  globalNumber?: number;
   title: string;
   elems: InspectElem[];
   wires: InspectWire[];
@@ -137,17 +138,23 @@ interface SheetSize {
   titleH: number;
 }
 
+// Sheet sizes are the full sheet, the way the PDF lays it out: the drawing area
+// is inset by 30 units on every side.
 const SHEET_SIZES: Record<string, SheetSize> = {
-  A: { w: 990, h: 732, titleW: 318, titleH: 96 },
-  B: { w: 1576, h: 976, titleW: 296, titleH: 96 },
-  C: { w: 2070, h: 1570, titleW: 423, titleH: 156 },
-  D: { w: 3270, h: 2070, titleW: 1014, titleH: 280 },
+  A: { w: 1020, h: 762, titleW: 318, titleH: 96 },
+  B: { w: 1606, h: 1006, titleW: 296, titleH: 96 },
+  C: { w: 2100, h: 1600, titleW: 423, titleH: 156 },
+  D: { w: 3300, h: 2100, titleW: 1014, titleH: 280 },
 };
+
+// The drawing area is inset by this margin on every side of the sheet.
+const FRAME_MARGIN = 30;
+// The logic is drawn relative to the top-left corner of the drawing area.
+const CONTENT_OFFSET_Y = FRAME_MARGIN;
 
 const INK = "#1f2937";
 const WIRE = "#374151";
 const FRAME = "#4b5563";
-const PIN_DOT = "#1f2937";
 
 function sheetSize(drawing: InspectDrawing | undefined): SheetSize {
   const letter = (drawing?.size || "D").toUpperCase();
@@ -159,9 +166,34 @@ const PT = 96 / 72;
 
 // The block header occupies part of the top edge; pins sit below it on a fixed
 // 20-unit pitch (verified against RT_01 / DINT_TO_DWORD in the reference FBD).
-function blockPinY(elem: InspectBlockElem, index: number): number {
-  return elem.y + (elem.isFunction ? 40 : 60) + index * 20;
+//
+// A block is drawn as a narrow strip on top that carries the instance name and a
+// body below it that carries the type name and the pins. A function (a block
+// without an instance name) has no strip: its body holds the type name.
+const BLOCK_STRIP_H = 19;
+const BLOCK_GAP = 1;
+const BLOCK_PIN_ROW = 39.8;
+const BLOCK_IN_NAME = 36.8;
+const BLOCK_OUT_NAME = 48.1;
+const BLOCK_PIN_STEP = 20;
+const BLOCK_PIN_GAP = 10.3;
+const BLOCK_PIN_HOOK = 5.2;
+
+function blockBodyTop(elem: InspectBlockElem): number {
+  const fn = elem.isFunction || !elem.instance;
+  return fn ? elem.y : elem.y + BLOCK_STRIP_H + BLOCK_GAP;
 }
+
+function blockPinY(elem: InspectBlockElem, index: number): number {
+  return blockBodyTop(elem) + BLOCK_PIN_ROW + index * BLOCK_PIN_STEP;
+}
+
+// A variable is drawn as a narrow box that carries the name and an area below it
+// that carries the annotation (the value, the description and the source), the way
+// TriStation prints it. The name box is inset by 10 units.
+const TERMINAL_NAME_H = 20;
+const TERMINAL_NAME_INSET = 10;
+const TERMINAL_PIN_GAP = 10;
 
 // ---------------------------------------------------------------- drawing
 
@@ -227,18 +259,18 @@ function CommentBox({ elem, front }: { elem: InspectCommentElem; front: boolean 
           height={elem.h}
           fill={front ? "#ffffff" : "none"}
           stroke={INK}
-          strokeWidth={1}
+          strokeWidth={1.6}
         />
       ) : null}
       {double ? (
         <rect
-          x={elem.x + 3}
-          y={elem.y + 3}
-          width={Math.max(0, elem.w - 6)}
-          height={Math.max(0, elem.h - 6)}
+          x={elem.x + 5}
+          y={elem.y + 5}
+          width={Math.max(0, elem.w - 10)}
+          height={Math.max(0, elem.h - 10)}
           fill="none"
           stroke={INK}
-          strokeWidth={1}
+          strokeWidth={1.6}
         />
       ) : null}
       <CommentText elem={elem} />
@@ -247,55 +279,54 @@ function CommentBox({ elem, front }: { elem: InspectCommentElem; front: boolean 
 }
 
 function BlockShape({ elem }: { elem: InspectBlockElem }) {
-  const header = elem.isFunction ? 40 : 60;
-  const label = elem.isFunction ? elem.typeName : elem.instance || elem.typeName;
-  const sub = elem.isFunction ? "" : elem.typeName;
-  const fontSize = 13;
+  const fn = elem.isFunction || !elem.instance;
+  const bodyTop = blockBodyTop(elem);
+  const bodyH = fn ? elem.h : Math.max(12, elem.h - BLOCK_STRIP_H - BLOCK_GAP);
   return (
     <g>
-      <rect x={elem.x} y={elem.y} width={elem.w} height={elem.h} fill="#ffffff" stroke={INK} strokeWidth={1.5} />
-      {!elem.isFunction ? (
-        <line x1={elem.x} y1={elem.y + header - 4} x2={elem.x + elem.w} y2={elem.y + header - 4} stroke={INK} strokeWidth={0.75} />
+      {!fn ? (
+        <>
+          <rect x={elem.x} y={elem.y} width={elem.w} height={BLOCK_STRIP_H} fill="#ffffff" stroke={INK} strokeWidth={1.6} />
+          <text
+            x={elem.x + elem.w / 2}
+            y={elem.y + 12.3}
+            textAnchor="middle"
+            fontSize={13}
+            fill={INK}
+            fontFamily="Arial, Helvetica, sans-serif"
+          >
+            {elem.instance}
+          </text>
+        </>
       ) : null}
+      <rect x={elem.x} y={bodyTop} width={elem.w} height={bodyH} fill="#ffffff" stroke={INK} strokeWidth={1.6} />
       <text
         x={elem.x + elem.w / 2}
-        y={elem.y + (elem.isFunction ? 26 : 22)}
+        y={bodyTop + 15.3}
         textAnchor="middle"
-        fontSize={fontSize}
-        fontWeight={600}
+        fontSize={16}
         fill={INK}
         fontFamily="Arial, Helvetica, sans-serif"
       >
-        {label}
+        {elem.typeName}
       </text>
-      {sub ? (
-        <text
-          x={elem.x + elem.w / 2}
-          y={elem.y + 46}
-          textAnchor="middle"
-          fontSize={fontSize - 1}
-          fill={INK}
-          fontFamily="Arial, Helvetica, sans-serif"
-        >
-          {sub}
-        </text>
-      ) : null}
       {elem.inputs.map((pin, i) => {
         const py = blockPinY(elem, i);
         return (
           <g key={`i-${pin.name}-${i}`}>
             <text
-              x={elem.x + 6}
-              y={py + 4}
+              x={elem.x + 3}
+              y={py - (BLOCK_PIN_ROW - BLOCK_IN_NAME)}
               textAnchor="start"
-              fontSize={12}
+              fontSize={11}
               fill={INK}
               fontFamily="Arial, Helvetica, sans-serif"
             >
               {pin.name}
             </text>
-            <line x1={elem.x} y1={py} x2={elem.x - 10} y2={py} stroke={INK} strokeWidth={1} />
-            <circle cx={elem.x - 10} cy={py} r={2.2} fill={PIN_DOT} />
+            <line x1={elem.x - BLOCK_PIN_GAP} y1={py - 4.1} x2={elem.x - BLOCK_PIN_GAP} y2={py + 4.1} stroke={INK} strokeWidth={1.6} />
+            <line x1={elem.x - BLOCK_PIN_GAP} y1={py} x2={elem.x - BLOCK_PIN_HOOK} y2={py} stroke={INK} strokeWidth={1.6} />
+            <line x1={elem.x - BLOCK_PIN_HOOK} y1={py} x2={elem.x} y2={py - 5} stroke={INK} strokeWidth={1.6} />
           </g>
         );
       })}
@@ -304,17 +335,17 @@ function BlockShape({ elem }: { elem: InspectBlockElem }) {
         return (
           <g key={`o-${name}-${i}`}>
             <text
-              x={elem.x + elem.w - 6}
-              y={py + 4}
+              x={elem.x + elem.w - 3}
+              y={py + (BLOCK_OUT_NAME - BLOCK_PIN_ROW)}
               textAnchor="end"
-              fontSize={12}
+              fontSize={11}
               fill={INK}
               fontFamily="Arial, Helvetica, sans-serif"
             >
               {name}
             </text>
-            <line x1={elem.x + elem.w} y1={py} x2={elem.x + elem.w + 10} y2={py} stroke={INK} strokeWidth={1} />
-            <circle cx={elem.x + elem.w + 10} cy={py} r={2.2} fill={PIN_DOT} />
+            <line x1={elem.x + elem.w} y1={py - 5} x2={elem.x + elem.w + BLOCK_PIN_HOOK} y2={py} stroke={INK} strokeWidth={1.6} />
+            <line x1={elem.x + elem.w + BLOCK_PIN_HOOK} y1={py} x2={elem.x + elem.w + BLOCK_PIN_GAP} y2={py} stroke={INK} strokeWidth={1.6} />
           </g>
         );
       })}
@@ -323,44 +354,68 @@ function BlockShape({ elem }: { elem: InspectBlockElem }) {
 }
 
 function TerminalShape({ elem }: { elem: InspectVarElem }) {
+  const tall = elem.h >= 2 * TERMINAL_NAME_H;
+  const nx = tall ? elem.x + TERMINAL_NAME_INSET : elem.x;
+  const nw = tall ? elem.w - 2 * TERMINAL_NAME_INSET : elem.w;
+  const nh = tall ? TERMINAL_NAME_H : elem.h;
+  const pinY = elem.y + nh / 2;
+  const annY = tall ? elem.y + TERMINAL_NAME_H : elem.y + elem.h;
+  const annH = tall ? elem.h - TERMINAL_NAME_H : 80;
+  const annLines = (elem.annotation ?? "").split("\n");
   return (
     <g>
-      <rect x={elem.x} y={elem.y} width={elem.w} height={elem.h} fill="#ffffff" stroke={INK} strokeWidth={1} />
-      {elem.outWire > 0 ? (
-        <>
-          <line x1={elem.x + elem.w} y1={elem.y + 4} x2={elem.x + elem.w} y2={elem.y + elem.h - 4} stroke={INK} strokeWidth={0.75} />
-          <line x1={elem.x + elem.w} y1={elem.y + 10} x2={elem.x + elem.w + 10} y2={elem.y + 10} stroke={INK} strokeWidth={1} />
-          <circle cx={elem.x + elem.w + 10} cy={elem.y + 10} r={2.2} fill={PIN_DOT} />
-        </>
-      ) : null}
-      {elem.inWire > 0 ? (
-        <>
-          <line x1={elem.x} y1={elem.y + 10} x2={elem.x - 10} y2={elem.y + 10} stroke={INK} strokeWidth={1} />
-          <circle cx={elem.x - 10} cy={elem.y + 10} r={2.2} fill={PIN_DOT} />
-        </>
-      ) : null}
+      <rect x={nx} y={elem.y} width={nw} height={nh} fill="#ffffff" stroke={INK} strokeWidth={1.6} />
       <text
-        x={elem.x + elem.w / 2}
-        y={elem.y + elem.h / 2 + 4}
+        x={nx + nw / 2}
+        y={elem.y + nh / 2 + 5.7}
         textAnchor="middle"
-        fontSize={12}
-        fontWeight={600}
+        fontSize={13}
         fill={INK}
         fontFamily="Arial, Helvetica, sans-serif"
       >
         {elem.name}
       </text>
-      {elem.annotate && elem.annotation ? (
-        <text
-          x={elem.x + elem.w / 2}
-          y={elem.y + elem.h + 13}
-          textAnchor="middle"
-          fontSize={11}
-          fill={INK}
-          fontFamily="Arial, Helvetica, sans-serif"
-        >
-          {elem.annotation}
-        </text>
+      {elem.inWire > 0 ? (
+        <rect
+          x={elem.x - TERMINAL_PIN_GAP + 0.4}
+          y={pinY - 2.55}
+          width={4.6}
+          height={5.1}
+          fill="#ffffff"
+          stroke={INK}
+          strokeWidth={1.6}
+        />
+      ) : null}
+      {elem.outWire > 0 ? (
+        <rect
+          x={elem.x + elem.w + TERMINAL_PIN_GAP - 5}
+          y={pinY - 2.55}
+          width={4.6}
+          height={5.1}
+          fill="#ffffff"
+          stroke={INK}
+          strokeWidth={1.6}
+        />
+      ) : null}
+      {elem.annotate ? (
+        <>
+          <rect x={elem.x} y={annY} width={elem.w} height={annH} fill="none" stroke={INK} strokeWidth={1.6} />
+          {annLines.map((line, i) =>
+            line.trim() ? (
+              <text
+                key={`a-${i}`}
+                x={elem.x + 5.3}
+                y={annY + 12.6 + i * 14}
+                textAnchor="start"
+                fontSize={13}
+                fill={INK}
+                fontFamily="Arial, Helvetica, sans-serif"
+              >
+                {line.trim()}
+              </text>
+            ) : null,
+          )}
+        </>
       ) : null}
     </g>
   );
@@ -457,7 +512,7 @@ function TitleBlock({
     "%REVISION": drawing.rev,
     "%SHEET_TEMPLATE": drawing.sheetTemplate,
     "%SHEET_TITLE": sheet.title || pouTitle,
-    "%SHEET_NUMBER": String(sheet.number),
+    "%SHEET_NUMBER": String(sheet.globalNumber ?? sheet.number),
     "%SHEET_COUNT": String(sheetCount),
     "%ELEMENT_NAME": pouName,
   };
@@ -505,7 +560,7 @@ function TitleBlock({
 
 function Frame({ drawing }: { drawing: InspectDrawing }) {
   const size = sheetSize(drawing);
-  const m = Math.round(size.w * (30 / 3270));
+  const m = FRAME_MARGIN;
   const hz = Math.max(1, drawing.hZones || 16);
   const vz = Math.max(1, drawing.vZones || 8);
   const innerW = size.w - 2 * m;
@@ -714,34 +769,38 @@ export function FbdSheet({
             sheetCount={sheetCount}
           />
 
-          {behind.map((c) => (
-            <CommentBox key={`cb-${c.id}`} elem={c} front={false} />
-          ))}
+          <g transform={`translate(0 ${CONTENT_OFFSET_Y})`}>
+            {behind.map((c) => (
+              <CommentBox key={`cb-${c.id}`} elem={c} front={false} />
+            ))}
 
-          {sheet.wires.map((w) => {
-            const pts = w.positions ?? [];
-            if (pts.length < 2) return null;
-            const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]} ${p[1]}`).join(" ");
-            const first = pts[0];
-            const last = pts[pts.length - 1];
-            return (
-              <g key={`w-${w.id}`}>
-                <path d={d} fill="none" stroke={WIRE} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-                <circle cx={first[0]} cy={first[1]} r={2.4} fill={PIN_DOT} />
-                <circle cx={last[0]} cy={last[1]} r={2.4} fill={PIN_DOT} />
-              </g>
-            );
-          })}
+            {sheet.wires.map((w) => {
+              const pts = w.positions ?? [];
+              if (pts.length < 2) return null;
+              const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]} ${p[1]}`).join(" ");
+              return (
+                <path
+                  key={`w-${w.id}`}
+                  d={d}
+                  fill="none"
+                  stroke={WIRE}
+                  strokeWidth={1.6}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+              );
+            })}
 
-          {logic.map((e) => {
-            if (e.kind === "block") return <BlockShape key={`b-${e.id}`} elem={e} />;
-            if (e.kind === "var") return <TerminalShape key={`v-${e.id}`} elem={e} />;
-            return null;
-          })}
+            {logic.map((e) => {
+              if (e.kind === "block") return <BlockShape key={`b-${e.id}`} elem={e} />;
+              if (e.kind === "var") return <TerminalShape key={`v-${e.id}`} elem={e} />;
+              return null;
+            })}
 
-          {front.map((c) => (
-            <CommentBox key={`cf-${c.id}`} elem={c} front />
-          ))}
+            {front.map((c) => (
+              <CommentBox key={`cf-${c.id}`} elem={c} front />
+            ))}
+          </g>
         </svg>
       </div>
     </div>

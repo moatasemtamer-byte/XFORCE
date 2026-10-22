@@ -36,6 +36,10 @@ from the documented limits plus the two timestamp attributes.
   `<variable>` (inputs and outputs).
 - **Collapsed blocks** — `snapEventId="0"` ⇔ `Collapsed` ⇔ ref omits `instanceName`.
 - **Sheets** — `Width = hZoneCount*20 + 2`, `Height = vZoneCount*25 + 2`.
+- **Coordinate origin** — positions are relative to the top-left corner of the drawing
+  area (the sheet's 30 unit margin), so the usable drawing height of template D is
+  `2100 - 2 * 30 = 2040`. An element whose bottom edge is below that falls outside the
+  frame; the TriStation editor drops those, and so does the `genfbd` builder.
 - **Pin-name export** — TriStation renames `MUX` data inputs `INk -> IN(k+1)`
   (`K,IN1,IN2,IN3` -> `K,IN2,IN3,IN4`). Handled by `ExportInPinName`; resolution still
   uses the source pin name.

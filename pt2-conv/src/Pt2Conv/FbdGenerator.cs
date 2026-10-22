@@ -416,9 +416,11 @@ public static class FbdGenerator
     }
 
     // Elements whose bottom edge lies below the drawing frame are dropped by the
-    // TriStation editor; the sheet height for template D (export coordinates) is 2070.
-    private const int SheetHeightExport = 2070;
-    private static bool IsClipped(int y, int h) => 10 * y + 40 + 10 * h > SheetHeightExport;
+    // TriStation editor. The export coordinates start at the top-left corner of the
+    // drawing area, so the usable height of template D (3300 x 2100 with a 30 unit
+    // margin all round) is 2100 - 2 * 30 = 2040.
+    private const int SheetHeightExport = 2040;
+    private static bool IsClipped(int y, int h) => y + h > SheetHeightExport;
 
     private sealed class ExVar : ExElem
     {

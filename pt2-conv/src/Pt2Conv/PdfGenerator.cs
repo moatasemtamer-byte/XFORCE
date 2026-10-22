@@ -22,7 +22,6 @@ public static class PdfGenerator
     private static readonly XColor Ink = XColor.FromArgb(0x1F, 0x29, 0x37);
     private static readonly XColor WireColor = XColor.FromArgb(0x37, 0x41, 0x51);
     private static readonly XColor FrameColor = XColor.FromArgb(0x4B, 0x55, 0x63);
-    private static readonly XColor PinDot = XColor.FromArgb(0x1F, 0x29, 0x37);
 
     // TriStation draws every line 0.5 pt wide on the sheet (1.6 sheet units).
     private static readonly XPen Ink1 = new(Ink, 1.6);
@@ -33,7 +32,6 @@ public static class PdfGenerator
     private static readonly XPen Frame15 = new(FrameColor, 1.6);
     private static readonly XBrush WhiteBrush = new XSolidBrush(XColors.White);
     private static readonly XBrush InkBrush = new XSolidBrush(Ink);
-    private static readonly XBrush PinBrush = new XSolidBrush(PinDot);
     private static readonly XBrush FrameBrush = new XSolidBrush(FrameColor);
 
     private const string FontFamily = "Arial";
@@ -412,6 +410,9 @@ public static class PdfGenerator
 
     // ---- wires --------------------------------------------------------------
 
+    // The wire runs from one pin to the other; the pin symbol itself (the bar of a
+    // block, the square of a terminal) is drawn by the element, so the wire only
+    // carries the line.
     private static void DrawWire(XGraphics gfx, PdfWire w)
     {
         if (w.Positions.Count < 2) return;
@@ -421,78 +422,105 @@ public static class PdfGenerator
             var b = w.Positions[i];
             gfx.DrawLine(WirePen, a.X, a.Y, b.X, b.Y);
         }
-        var first = w.Positions[0];
-        var last = w.Positions[^1];
-        DrawDot(gfx, first.X, first.Y, 2.4);
-        DrawDot(gfx, last.X, last.Y, 2.4);
     }
 
     // ---- blocks -------------------------------------------------------------
 
-    private static double BlockPinY(PdfBlockElem e, int i) => e.Y + (e.IsFunction ? 40 : 60) + i * 20;
+    // A function block is drawn as a narrow strip on top that carries the instance
+    // name and a body below it that carries the type name and the pins. A function
+    // (a block without an instance name) has no strip: its body holds the type name.
+    private const double BlockStripH = 19;
+    private const double BlockGap = 1;
+
+    // The pins inside the body, measured from the top of the body: the wire sits on
+    // the row, the input names just above it and the output names below it.
+    private const double BlockPinRow = 39.8;
+    private const double BlockInName = 36.8;
+    private const double BlockOutName = 48.1;
+    private const double BlockPinStep = 20;
+
+    // The pin symbol of a block: a bar across the wire, a stub and a hook into the
+    // box. The wire itself stops short of the box, the way TriStation prints it.
+    private const double BlockPinGap = 10.3;
+    private const double BlockPinHook = 5.2;
 
     private static void DrawBlock(XGraphics gfx, PdfBlockElem e)
     {
-        double header = e.IsFunction ? 40 : 60;
-        string label = e.IsFunction ? e.TypeName : (string.IsNullOrEmpty(e.Instance) ? e.TypeName : e.Instance);
-        string sub = e.IsFunction ? "" : e.TypeName;
+        bool fn = e.IsFunction || string.IsNullOrEmpty(e.Instance);
+        double bodyTop = fn ? e.Y : e.Y + BlockStripH + BlockGap;
+        double bodyH = fn ? e.H : Math.Max(12, e.H - BlockStripH - BlockGap);
 
-        gfx.DrawRectangle(Ink15, WhiteBrush, e.X, e.Y, e.W, e.H);
-        if (!e.IsFunction)
-            gfx.DrawLine(Ink075, e.X, e.Y + header - 4, e.X + e.W, e.Y + header - 4);
-
-        var nameFont = new XFont(FontFamily, 16, XFontStyle.Bold);
-        DrawCentered(gfx, label, nameFont, InkBrush, e.X + e.W / 2, e.Y + (e.IsFunction ? 26 : 22));
-
-        if (!string.IsNullOrEmpty(sub))
+        if (!fn)
         {
-            var subFont = new XFont(FontFamily, 13);
-            DrawCentered(gfx, sub, subFont, InkBrush, e.X + e.W / 2, e.Y + 46);
+            gfx.DrawRectangle(Ink1, WhiteBrush, e.X, e.Y, e.W, BlockStripH);
+            var stripFont = new XFont(FontFamily, 13);
+            DrawBaseline(gfx, e.Instance, stripFont, InkBrush, e.X + e.W / 2, e.Y + 12.3, true);
         }
+
+        gfx.DrawRectangle(Ink1, WhiteBrush, e.X, bodyTop, e.W, bodyH);
+
+        var typeFont = new XFont(FontFamily, 16);
+        DrawBaseline(gfx, e.TypeName, typeFont, InkBrush, e.X + e.W / 2, bodyTop + 15.3, true);
 
         var pinFont = new XFont(FontFamily, 11);
         for (int i = 0; i < e.Inputs.Count; i++)
         {
-            double py = BlockPinY(e, i);
-            gfx.DrawString(e.Inputs[i].Name, pinFont, InkBrush, e.X + 6, py + 4);
-            gfx.DrawLine(Ink1, e.X, py, e.X - 10, py);
-            DrawDot(gfx, e.X - 10, py, 2.2);
+            double row = bodyTop + BlockPinRow + i * BlockPinStep;
+            DrawBaseline(gfx, e.Inputs[i].Name, pinFont, InkBrush, e.X + 3, row - (BlockPinRow - BlockInName), false);
+            gfx.DrawLine(Ink1, e.X - BlockPinGap, row - 4.1, e.X - BlockPinGap, row + 4.1);
+            gfx.DrawLine(Ink1, e.X - BlockPinGap, row, e.X - BlockPinHook, row);
+            gfx.DrawLine(Ink1, e.X - BlockPinHook, row, e.X, row - 5);
         }
         for (int i = 0; i < e.Outputs.Count; i++)
         {
-            double py = BlockPinY(e, i);
+            double row = bodyTop + BlockPinRow + i * BlockPinStep;
             var sz = gfx.MeasureString(e.Outputs[i], pinFont);
-            gfx.DrawString(e.Outputs[i], pinFont, InkBrush, e.X + e.W - 6 - sz.Width, py + 4);
-            gfx.DrawLine(Ink1, e.X + e.W, py, e.X + e.W + 10, py);
-            DrawDot(gfx, e.X + e.W + 10, py, 2.2);
+            DrawBaseline(gfx, e.Outputs[i], pinFont, InkBrush, e.X + e.W - 3 - sz.Width,
+                row + (BlockOutName - BlockPinRow), false);
+            gfx.DrawLine(Ink1, e.X + e.W, row - 5, e.X + e.W + BlockPinHook, row);
+            gfx.DrawLine(Ink1, e.X + e.W + BlockPinHook, row, e.X + e.W + BlockPinGap, row);
         }
     }
 
     // ---- terminals ----------------------------------------------------------
 
+    // A variable is drawn as a narrow box that carries the name and an area below
+    // it that carries the annotation (the value, the description and the source),
+    // the way TriStation prints it. The name box is inset by 10 units.
+    private const double TerminalNameH = 20;
+    private const double TerminalNameInset = 10;
+    private const double TerminalPinGap = 10;
+
     private static void DrawTerminal(XGraphics gfx, PdfVarElem e)
     {
-        gfx.DrawRectangle(Ink1, WhiteBrush, e.X, e.Y, e.W, e.H);
+        bool tall = e.H >= 2 * TerminalNameH;
+        double nx = tall ? e.X + TerminalNameInset : e.X;
+        double nw = tall ? e.W - 2 * TerminalNameInset : e.W;
+        double nh = tall ? TerminalNameH : e.H;
 
-        if (e.HasOutWire)
-        {
-            gfx.DrawLine(Ink075, e.X + e.W, e.Y + 4, e.X + e.W, e.Y + e.H - 4);
-            gfx.DrawLine(Ink1, e.X + e.W, e.Y + 10, e.X + e.W + 10, e.Y + 10);
-            DrawDot(gfx, e.X + e.W + 10, e.Y + 10, 2.2);
-        }
-        if (e.HasInWire)
-        {
-            gfx.DrawLine(Ink1, e.X, e.Y + 10, e.X - 10, e.Y + 10);
-            DrawDot(gfx, e.X - 10, e.Y + 10, 2.2);
-        }
+        gfx.DrawRectangle(Ink1, WhiteBrush, nx, e.Y, nw, nh);
 
-        var nameFont = new XFont(FontFamily, 13, XFontStyle.Bold);
-        DrawCentered(gfx, e.Name, nameFont, InkBrush, e.X + e.W / 2, e.Y + e.H / 2);
+        var nameFont = new XFont(FontFamily, 13);
+        DrawBaseline(gfx, e.Name, nameFont, InkBrush, nx + nw / 2, e.Y + nh / 2 + 5.7, true);
 
-        if (e.Annotate && !string.IsNullOrWhiteSpace(e.Annotation))
+        // The pin of the terminal is a small square at the end of its wire.
+        double pinY = e.Y + nh / 2;
+        if (e.HasInWire) gfx.DrawRectangle(Ink1, e.X - TerminalPinGap + 0.4, pinY - 2.55, 4.6, 5.1);
+        if (e.HasOutWire) gfx.DrawRectangle(Ink1, e.X + e.W + TerminalPinGap - 5.0, pinY - 2.55, 4.6, 5.1);
+
+        if (!e.Annotate) return;
+
+        double ay = tall ? e.Y + TerminalNameH : e.Y + e.H;
+        double ah = tall ? e.H - TerminalNameH : 80;
+        gfx.DrawRectangle(Ink1, e.X, ay, e.W, ah);
+
+        if (string.IsNullOrWhiteSpace(e.Annotation)) return;
+        var annFont = new XFont(FontFamily, 13);
+        double y = ay + 12.6;
+        foreach (var line in e.Annotation.Split('\n'))
         {
-            var annFont = new XFont(FontFamily, 11);
-            DrawCentered(gfx, e.Annotation, annFont, InkBrush, e.X + e.W / 2, e.Y + e.H + 13);
+            DrawBaseline(gfx, line.Trim(), annFont, InkBrush, e.X + 5.3, y, false);
+            y += 14;
         }
     }
 
@@ -509,7 +537,7 @@ public static class PdfGenerator
             else gfx.DrawRectangle(Ink1, e.X, e.Y, e.W, e.H);
         }
         if (dbl)
-            gfx.DrawRectangle(Ink1, e.X + 3, e.Y + 3, Math.Max(0, e.W - 6), Math.Max(0, e.H - 6));
+            gfx.DrawRectangle(Ink1, e.X + 5, e.Y + 5, Math.Max(0, e.W - 10), Math.Max(0, e.H - 10));
 
         double fontSize = FontUnits(e.TextSize <= 0 ? 10 : e.TextSize);
         var font = new XFont(FontFamily, fontSize);
@@ -592,14 +620,20 @@ public static class PdfGenerator
 
     // ---- helpers ------------------------------------------------------------
 
-    private static void DrawDot(XGraphics gfx, double cx, double cy, double r)
-        => gfx.DrawEllipse(PinBrush, cx - r, cy - r, r * 2, r * 2);
-
     /// <summary>Draws a text centred in a point (both axes).</summary>
     private static void DrawCentered(XGraphics gfx, string text, XFont font, XBrush brush, double cx, double cy)
     {
         var sz = gfx.MeasureString(text, font);
         gfx.DrawString(text, font, brush, cx - sz.Width / 2, cy + 0.35 * font.Size);
+    }
+
+    /// <summary>Draws a text with its baseline on a line, centred on a column when asked.</summary>
+    private static void DrawBaseline(XGraphics gfx, string text, XFont font, XBrush brush,
+        double x, double baseline, bool center)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        var sz = gfx.MeasureString(text, font);
+        gfx.DrawString(text, font, brush, center ? x - sz.Width / 2 : x, baseline);
     }
 
     /// <summary>Draws a row label in a frame band. TriStation centres a doubled letter
