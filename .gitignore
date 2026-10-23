@@ -76,6 +76,7 @@ next-env.d.ts
 /artifacts/
 /work/
 /status/
+/TunnelBear/
 /*.zip
 /.pytest_cache/
 /.dev_loop/
