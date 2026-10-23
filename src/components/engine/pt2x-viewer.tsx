@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { NxButton, NxPanel, NxPanelBody, NxPanelTitle, NxStat, nxInputClass } from "@/components/nx/primitives";
 import { FbdSheet, type InspectProject, type InspectPou, type SheetZoom } from "@/components/engine/fbd-sheet";
+import { takeViewerHandoff } from "@/lib/viewer-handoff";
 
 // ---------------------------------------------------------------------------
 // POU detail: interface table, ST source, FBD sheets.
@@ -252,12 +253,15 @@ function PouInterface({ pou }: { pou: InspectPou }) {
 // The viewer: drop a .pt2/.pt2x, browse POUs, tags, and logic.
 // ---------------------------------------------------------------------------
 
-export function PtxViewer() {
+export function PtxViewer({ initialFile }: { initialFile?: File | null }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   // Set when the viewer unmounts (or a new inspection starts) so a poll loop that
   // is mid-flight stops touching state for a job nobody is watching anymore.
   const cancelledRef = useRef(false);
+  // The first file handed in by a parent (a finished job's output) is inspected
+  // once; later renders must not start the inspection again.
+  const startedFileRef = useRef<File | null>(null);
   const [project, setProject] = useState<InspectProject | null>(null);
   const [sourceName, setSourceName] = useState<string>("");
   const [pouName, setPouName] = useState<string | null>(null);
@@ -436,21 +440,19 @@ export function PtxViewer() {
     }
   }, [clearPdf]);
 
-  // A convert run can hand its freshly built .pt2x straight to the viewer via
-  // sessionStorage (set by the convert form's "Open in viewer" button).
+  // A convert run hands its freshly built .pt2x over in memory (not sessionStorage,
+  // whose ~5 MB quota large containers exceed); the dropzone covers a reload.
   useEffect(() => {
-    const raw = sessionStorage.getItem("msw-pt2x-view");
-    if (!raw) return;
-    sessionStorage.removeItem("msw-pt2x-view");
+    const handoff = takeViewerHandoff();
+    if (!handoff) return;
     let file: File | null = null;
     try {
-      const { name, base64 } = JSON.parse(raw) as { name: string; base64: string };
-      const binary = atob(base64);
+      const binary = atob(handoff.base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      file = new File([bytes], name, { type: "application/octet-stream" });
+      file = new File([bytes], handoff.name, { type: "application/octet-stream" });
     } catch {
-      // A corrupt stash is not worth an error banner; the dropzone is right there.
+      // A corrupt handoff is not worth an error banner; the dropzone is right there.
     }
     if (!file) return;
     const picked = file;
@@ -458,6 +460,15 @@ export function PtxViewer() {
     const timer = setTimeout(() => void inspect(picked), 0);
     return () => clearTimeout(timer);
   }, [inspect]);
+
+  // A finished job's stored output is handed in as a File by the parent, so the
+  // bytes never have to be staged in a storage area with a quota.
+  useEffect(() => {
+    if (!initialFile || startedFileRef.current === initialFile) return;
+    startedFileRef.current = initialFile;
+    const timer = setTimeout(() => void inspect(initialFile), 0);
+    return () => clearTimeout(timer);
+  }, [initialFile, inspect]);
 
   // Stop any poll loop still running when the viewer goes away.
   useEffect(() => {
@@ -510,8 +521,8 @@ export function PtxViewer() {
           dragging && !busy ? "border-nx-neon bg-nx-green-50" : "border-nx-line bg-nx-white"
         } ${busy ? "pointer-events-none opacity-60" : ""}`}
       >
-        <p className="text-sm font-semibold text-nx-ink">Drop a .pt2x here</p>
-        <p className="text-xs text-nx-hint">or pick a file from disk</p>
+        <p className="text-sm font-semibold text-nx-ink">Drop a .pt2 or .pt2x here</p>
+        <p className="text-xs text-nx-hint">No conversion needed — the viewer reads TriStation containers directly.</p>
         <input
           ref={inputRef}
           type="file"
@@ -578,7 +589,7 @@ export function PtxViewer() {
                     viewMode === mode ? "bg-nx-green-100 text-nx-ink" : "text-nx-hint hover:bg-nx-green-50"
                   }`}
                 >
-                  {mode === "fbd" ? "FBD" : "PDF"}
+                  {mode === "fbd" ? "View as PT2X" : "View as PDF"}
                 </button>
               ))}
             </div>

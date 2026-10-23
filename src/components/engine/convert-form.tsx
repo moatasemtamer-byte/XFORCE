@@ -20,6 +20,7 @@ import {
 } from "@/components/engine/convert-flow";
 import { ConvertStations } from "@/components/nx/convert-stations";
 import { ConvertHistory } from "@/components/engine/convert-history";
+import { setViewerHandoff } from "@/lib/viewer-handoff";
 import {
   NxButton,
   NxField,
@@ -116,11 +117,13 @@ function postConvert(
   });
 }
 
-// Stashes a freshly built .pt2x in sessionStorage so the project viewer can
-// decompile and render it without the user re-uploading the file.
+// Hands a freshly built .pt2x to the project viewer so it can decompile and render
+// it without the user re-uploading the file. Kept in memory rather than
+// sessionStorage: containers are tens of megabytes and their base64 form exceeds
+// the ~5 MB storage quota.
 function stashForViewer(artifact: Artifact) {
   if (!artifact.contentBase64) return false;
-  sessionStorage.setItem("msw-pt2x-view", JSON.stringify({ name: artifact.name, base64: artifact.contentBase64 }));
+  setViewerHandoff({ name: artifact.name, base64: artifact.contentBase64 });
   return true;
 }
 

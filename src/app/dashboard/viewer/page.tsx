@@ -70,21 +70,28 @@ export default async function DashboardViewerPage({ searchParams }: PageProps<"/
     <div className="space-y-8">
       <PageTitle
         title="Project viewer"
-        description="Open a finished PT2X conversion and browse its ladder logic sheet by sheet."
+        description="Browse a TriStation container sheet by sheet, or open a finished PT2X conversion."
+        action={
+          <ButtonLink href="/engine/viewer" variant="outline" size="sm">
+            Open from disk
+          </ButtonLink>
+        }
       />
 
       {viewable.length === 0 ? (
         <Panel>
           <EmptyState
             title="No PT2X projects to view yet"
-            description="Convert a source file to PT2X and it will appear here, ready to open in the viewer."
+            description="Drop a .pt2 or .pt2x straight into the viewer, or convert a source file and open the result here."
             action={
-              <Link
-                href="/dashboard/convert"
-                className="inline-flex h-9 items-center rounded-lg bg-signal-500 px-4 text-sm font-semibold text-ink-950"
-              >
-                Start a conversion
-              </Link>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <ButtonLink href="/engine/viewer" variant="primary" size="sm">
+                  Open a project file
+                </ButtonLink>
+                <ButtonLink href="/dashboard/convert" variant="outline" size="sm">
+                  Start a conversion
+                </ButtonLink>
+              </div>
             }
           />
         </Panel>
