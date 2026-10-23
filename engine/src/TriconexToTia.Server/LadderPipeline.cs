@@ -250,16 +250,9 @@ public static class LadderPipeline
         {
             var group = groups[i];
             var name = SanitizePouName(group.Name ?? ("PROGRAM_" + (i + 1)));
-            // The naming row: BL scans for a row whose text contains "Logic" and uses its first
-            // `@`-separated field as the program name (LadderTextOperations_safety.cs).
-            var rows = new List<(string Logic, string Network)>(group.Rows.Count + 1)
-            {
-                (name + "@Logic", "0"),
-            };
-            rows.AddRange(group.Rows);
 
             var wb = Path.Combine(work, $"functions_{i}.xlsx");
-            BlFunctionsWorkbook.Write(rows, wb);
+            BlFunctionsWorkbook.Write(group.Rows, wb);
             var xp = Path.Combine(work, $"ladder_{i}.xml");
             var bytes = await RunOneAsync(ladderCli, wb, xp, dptPath, templatePath, report, reportStage, cancellationToken);
             if (bytes is null) return null;
@@ -294,11 +287,11 @@ public static class LadderPipeline
         return await File.ReadAllBytesAsync(xmlPath, cancellationToken);
     }
 
-    // BL emits the whole project template plus the one program it just built. To stitch several
-    // runs into one project we keep the first run's XML as the base (template + its program) and
-    // append the generated program POU from every later run. The generated POU is the one whose
-    // name matches the placeholder we fed in; template POUs (FBs, the shared TEMPLATES/P01_FB)
-    // are common to every run, so they are NOT copied again.
+    // BL emits the whole project template plus the one program it just built — always named
+    // "SeimensLogic" (the default in LadderTextOperations_safety.cs when no naming row is present).
+    // To stitch several runs into one project we keep the first run's XML as the base, rename its
+    // generated program, then for each later run rename its generated program and append only that
+    // POU. Template POUs (FBs, TEMPLATES, P01_FB) are identical across runs, so they are kept once.
     private static byte[] MergeProgramXml(List<byte[]> xmls, List<string> names)
     {
         if (xmls.Count == 0) return Array.Empty<byte>();
@@ -306,22 +299,60 @@ public static class LadderPipeline
 
         var baseDoc = new XmlDocument { PreserveWhitespace = true };
         baseDoc.LoadXml(Encoding.UTF8.GetString(StripBom(xmls[0])));
-        var root = baseDoc.DocumentElement!;
+        var pous = baseDoc.SelectSingleNode("//*[local-name()='types']/*[local-name()='pous']")
+            ?? throw new InvalidOperationException("BL output has no project/types/pous container.");
 
+        var generated = FindGeneratedProgram(baseDoc)
+            ?? throw new InvalidOperationException("BL output has no generated 'SeimensLogic' program POU.");
+        RenameProgram(baseDoc, generated, names[0]);
+
+        // Keep the generated programs contiguous: insert each new one right after the previous,
+        // so they sit together (and before the template's TEMPLATES/P01_FB programs).
+        XmlNode insertAfter = generated;
         for (var i = 1; i < xmls.Count; i++)
         {
             var doc = new XmlDocument { PreserveWhitespace = true };
             doc.LoadXml(Encoding.UTF8.GetString(StripBom(xmls[i])));
-            foreach (XmlNode node in doc.DocumentElement!.SelectNodes("./*[local-name()='pou']")!)
-            {
-                var import = baseDoc.ImportNode(node, true);
-                root.AppendChild(import);
-            }
+            var gen = FindGeneratedProgram(doc)
+                ?? throw new InvalidOperationException("BL output has no generated 'SeimensLogic' program POU.");
+            RenameProgram(doc, gen, names[i]);
+            var imported = baseDoc.ImportNode(gen, true);
+            pous.InsertAfter(imported, insertAfter);
+            insertAfter = imported;
         }
 
         using var ms = new MemoryStream();
         baseDoc.Save(ms);
         return ms.ToArray();
+    }
+
+    // The generated program is the POU BL names "SeimensLogic"; the template's own programs are
+    // TEMPLATES (twice) and P01_FB. Match on the default name, and only among program POUs.
+    private static XmlElement? FindGeneratedProgram(XmlDocument doc)
+    {
+        foreach (XmlNode node in doc.SelectNodes("//*[local-name()='pou' and @pouType='program']")!)
+        {
+            if (node is XmlElement el &&
+                string.Equals(el.GetAttribute("name"), "SeimensLogic", StringComparison.Ordinal))
+                return el;
+        }
+        return null;
+    }
+
+    // The POU name lives in the element's attribute and in the body's <name> element. Other
+    // references (e.g. the resource's task->pou binding) also carry it; patch every exact
+    // "SeimensLogic" text/attribute under this POU so nothing points at the old name.
+    private static void RenameProgram(XmlDocument doc, XmlElement pou, string newName)
+    {
+        pou.SetAttribute("name", newName);
+        foreach (XmlNode node in pou.SelectNodes(".//*[@name='SeimensLogic']")!)
+        {
+            if (node is XmlElement el) el.SetAttribute("name", newName);
+        }
+        foreach (XmlNode node in pou.SelectNodes(".//*[local-name()='name' and text()='SeimensLogic']")!)
+        {
+            node.InnerText = newName;
+        }
     }
 
     private static byte[] StripBom(byte[] bytes)
