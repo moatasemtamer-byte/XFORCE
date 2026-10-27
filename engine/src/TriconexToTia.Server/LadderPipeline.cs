@@ -276,13 +276,19 @@ public static class LadderPipeline
         Action<string>? reportStage,
         CancellationToken cancellationToken)
     {
-        // Fast path: no grouping. One workbook, one run (BL names the program itself).
+        // Fast path: the listing names no program (no PROGRAM= tags). BL writes the program under
+        // its built-in default name; report which name that is so the operator can see where it
+        // came from, and note that the project's own name (when a template is supplied) wins below.
         if (groups.Count == 1 && groups[0].Name is null)
         {
             var wb = Path.Combine(work, "functions.xlsx");
             BlFunctionsWorkbook.Write(equations, wb);
             report.AppendLine($"equations: {equations.Count}");
-            return await RunOneAsync(ladderCli, wb, Path.Combine(work, "ladder.xml"), dptPath, templatePath, report, reportStage, cancellationToken);
+            var bytes = await RunOneAsync(ladderCli, wb, Path.Combine(work, "ladder.xml"), dptPath, templatePath, report, reportStage, cancellationToken);
+            if (bytes is null) return null;
+            report.AppendLine($"program name: '{GeneratedProgramName(bytes) ?? "?"}' " +
+                              "(the listing carries no PROGRAM= tags, so the converter default is used)");
+            return bytes;
         }
 
         var xmls = new List<byte[]>();
@@ -497,8 +503,20 @@ public static class LadderPipeline
         => bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF
             ? bytes[3..] : bytes;
 
-    private static int CountPrograms(byte[] xml)
+    /// <summary>Name of BL's generated program (the default-named one), or null.</summary>
+    private static string? GeneratedProgramName(byte[] xml)
     {
+        try
+        {
+            foreach (XmlNode node in Load(xml).SelectNodes("//*[local-name()='pou' and @pouType='program']")!)
+                if (node is XmlElement el && el.GetAttribute("name").Length > 0)
+                    return el.GetAttribute("name");
+        }
+        catch { /* diagnostics only */ }
+        return null;
+    }
+
+    private static int CountPrograms(byte[] xml)    {
         try
         {
             return Load(xml).SelectNodes("//*[local-name()='pou' and @pouType='program']")!.Count;
