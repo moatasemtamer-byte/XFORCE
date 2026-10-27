@@ -12,6 +12,11 @@ public sealed class TrdpReport
     public string Name = "";
     public double Width = 612;   // points
     public double Height = 792;  // points
+    /// <summary>Authored body width (the report's <c>Width</c> attribute) before paper
+    /// margins are applied. Used to scale the template onto the real page width.</summary>
+    public double DesignWidth;
+    public string PaperKind = "";
+    public bool Landscape;
     public double MarginLeft, MarginTop, MarginRight, MarginBottom;
     public string DataSourceName = "";
     public TrdpStyleSheet Styles = new();

@@ -37,14 +37,25 @@ public static class EmbeddedBase
 
     public static string EnsureExtracted()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "pt2conv_base");
+        // The extracted base is cached under a content hash: replacing the embedded
+        // resource (a new library/hardware scaffold) must not keep reusing the old tree.
+        byte[] packed = LoadPackedBytes();
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        string tag = Convert.ToHexString(sha.ComputeHash(packed))[..12].ToLowerInvariant();
+        string dir = Path.Combine(Path.GetTempPath(), "pt2conv_base_" + tag);
         if (Directory.Exists(dir) && Directory.Exists(Path.Combine(dir, "Current")))
-        {
-            // simple idempotent: if marker exists (Current dir), return
             return dir;
-        }
-        // clean and extract
         if (Directory.Exists(dir)) Directory.Delete(dir, true);
         return ExtractTo(dir);
+    }
+
+    private static byte[] LoadPackedBytes()
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        using var stream = asm.GetManifestResourceStream(ResourceName)
+            ?? throw new InvalidOperationException("Embedded base resource not found: " + ResourceName);
+        using var mem = new MemoryStream();
+        stream.CopyTo(mem);
+        return mem.ToArray();
     }
 }

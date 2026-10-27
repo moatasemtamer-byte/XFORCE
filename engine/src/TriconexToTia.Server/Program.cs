@@ -664,17 +664,15 @@ static async Task<(byte[]? Xml, string FileName, string LadderReport, string Imp
         byte[] sourceBytes = rawBytes;
         string sourceName = filename;
 
-        if ((extension == ".lpt" || extension == ".txt") && TriconexToTia.Engine.Ladder.LptToPdf.HasTristationPageHeaders(rawBytes))
-        {
-            reportStage?.Invoke("converting lpt to pdf");
-            sourceBytes = TriconexToTia.Engine.Ladder.LptToPdf.ConvertToPdf(rawBytes);
-            sourceName = Path.GetFileNameWithoutExtension(filename) + ".pdf";
-        }
-        else if (extension == ".pdf")
+        if (extension == ".pdf")
         {
             sourceBytes = rawBytes;
             sourceName = filename;
         }
+        // A .lpt/.txt listing is fed to the reader as-is. circuit-reader's TextListingReader
+        // parses the ASCII listing directly (it identifies a real PDF by the "%PDF-" signature,
+        // anything else is a text listing). Rendering the listing to PDF first used to drop lines
+        // that overflowed a page and depended on a Windows font, so it is deliberately skipped.
 
         await using var sourceStream = new MemoryStream(sourceBytes);
         await using var dptStream = form.Files.GetFile("dpt")?.OpenReadStream();

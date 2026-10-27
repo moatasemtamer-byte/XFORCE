@@ -83,20 +83,47 @@ public static class TrdpReader
             Width = Unit(Attr(root, "Width"), 612),
             DataSourceName = Attr(root, "DataSourceName"),
         };
+        report.DesignWidth = report.Width;
+        report.Height = 792;
 
         var ps = root.Element(Ns + "PageSettings");
         if (ps != null)
         {
-            report.Width = Unit(Attr(ps, "PaperWidth"), report.Width);
-            report.Height = Unit(Attr(ps, "PaperHeight"), 792);
+            report.PaperKind = Attr(ps, "PaperKind");
+            report.Landscape = BoolAttr(ps, "Landscape", false);
+
+            // Margins are authored as <Margins><MarginsU Left="0.5in" .../></Margins>.
             var m = ps.Element(Ns + "Margins");
-            if (m != null)
+            var mu = m?.Element(Ns + "MarginsU") ?? m;
+            if (mu != null)
             {
-                report.MarginLeft = Unit(Attr(m, "Left"), 0);
-                report.MarginTop = Unit(Attr(m, "Top"), 0);
-                report.MarginRight = Unit(Attr(m, "Right"), 0);
-                report.MarginBottom = Unit(Attr(m, "Bottom"), 0);
+                report.MarginLeft = Unit(Attr(mu, "Left"), 0);
+                report.MarginTop = Unit(Attr(mu, "Top"), 0);
+                report.MarginRight = Unit(Attr(mu, "Right"), 0);
+                report.MarginBottom = Unit(Attr(mu, "Bottom"), 0);
             }
+
+            double paperW = Unit(Attr(ps, "PaperWidth"), 0);
+            double paperH = Unit(Attr(ps, "PaperHeight"), 0);
+            if (paperW <= 0 || paperH <= 0)
+            {
+                var (w, h) = PaperSize(report.PaperKind);
+                paperW = w;
+                paperH = h;
+                if (report.Landscape && paperW < paperH) (paperW, paperH) = (paperH, paperW);
+            }
+
+            // The template's body must fit between the margins; enlarge the sheet when the
+            // margins were omitted or a custom width is wider than the nominal paper.
+            double minW = report.DesignWidth + report.MarginLeft + report.MarginRight;
+            if (paperW < minW) paperW = minW;
+            report.Width = paperW;
+            report.Height = paperH > 0 ? paperH : 792;
+        }
+        else
+        {
+            // No page settings: assume Letter and derive the width from the designed body.
+            report.Width = report.DesignWidth;
         }
 
         ParseStyles(root, report.Styles);
@@ -388,6 +415,24 @@ public static class TrdpReader
             tb.PadBottom = Unit(Attr(pad, "Bottom"), 0);
         }
         return st;
+    }
+
+    /// <summary>Portrait dimensions in points for the paper kinds TriStation emits.</summary>
+    private static (double W, double H) PaperSize(string kind)
+    {
+        switch (kind.Trim().ToLowerInvariant())
+        {
+            case "a3": return (841.89, 1190.55);
+            case "a4": return (595.28, 841.89);
+            case "a5": return (419.53, 595.28);
+            case "b5": return (498.90, 708.66);
+            case "legal": return (612, 1008);
+            case "executive": return (522, 756);
+            case "statement": return (396, 612);
+            case "tabloid": return (792, 1224);
+            case "ledger": return (1224, 792);
+            default: return (612, 792);
+        }
     }
 
     // ---- attribute helpers --------------------------------------------------

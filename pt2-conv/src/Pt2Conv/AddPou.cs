@@ -22,6 +22,14 @@ namespace Pt2Conv;
 /// </summary>
 public static class AddPou
 {
+    /// <summary>
+    /// Serializes Current/Project.xml the way TriStation does: declaration + one line,
+    /// and self-closing elements without the space XElement normally inserts before "/>".
+    /// </summary>
+    internal static byte[] SerializeProject(XElement root)
+        => Encoding.UTF8.GetBytes("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+                                  root.ToString(SaveOptions.DisableFormatting).Replace(" />", "/>") + "\n");
+
     public sealed class InsertResult
     {
         public int DogTag;
@@ -75,6 +83,150 @@ public static class AddPou
     /// The donor's language stream and its _crc are cloned; the language stream is renamed but its
     /// body is NOT rewritten (the caller is expected to regenerate it).
     /// </summary>
+    /// <summary>
+    /// Creates a catalog entry for a POU from scratch (no donor) using the entry shape a
+    /// TriStation XML import produces, and seeds the element folder with an empty language
+    /// stream so the caller can regenerate it. The blank/base project ships without any
+    /// FBD element to clone (its whole element library is ST), so importing an FBD POU
+    /// must synthesise the entry.
+    /// </summary>
+    public static InsertResult InsertSynth(
+        List<(string Path, byte[] Data)> tree,
+        string newName,
+        bool isProgram,
+        string ext)
+    {
+        int px = tree.FindIndex(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase));
+        if (px < 0) throw new InvalidOperationException("no Current/Project.xml in template");
+        var doc = XDocument.Parse(Encoding.UTF8.GetString(tree[px].Data), LoadOptions.PreserveWhitespace);
+        var root = doc.Root ?? throw new InvalidOperationException("no root element");
+
+        var elements = root.Descendants().FirstOrDefault(e =>
+            e.Name.LocalName == "Collection" && (string?)e.Attribute("Name") == "Elements")
+            ?? throw new InvalidOperationException("no Elements collection in Project.xml");
+
+        var entries = elements.Elements().Where(e => e.Name.LocalName == "Class").ToList();
+        if (entries.Any(e => string.Equals((string?)e.Attribute("ElemName"), newName, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"new POU name already exists: {newName}");
+
+        int newDog = 1;
+        foreach (var e in entries)
+            if (int.TryParse((string?)e.Attribute("DogTag"), out int d) && d >= newDog) newDog = d + 1;
+        string newFName = newDog.ToString("x8");
+
+        bool st = ext.Equals(".ST", StringComparison.OrdinalIgnoreCase);
+        var entry = new XElement("Class",
+            new XAttribute("CategoryID", "10097"),
+            new XAttribute("ResourceID", st ? "10164" : "10162"),
+            new XAttribute("IsNewElement", "False"),
+            new XAttribute("PlatformLock1", "False"),
+            new XAttribute("PlatformLock2", "False"),
+            new XAttribute("ElementType", isProgram ? "1" : "2"),
+            new XAttribute("ElementSubType", isProgram ? "0" : "6"),
+            new XAttribute("LibID", "1"),
+            new XAttribute("ElemName", newName),
+            new XAttribute("DescShort", ""),
+            new XAttribute("Description", ""),
+            new XAttribute("FName", newFName),
+            new XAttribute("Extension", st ? ".ST" : ".FBD"),
+            new XAttribute("Owner", "1"),
+            new XAttribute("Locked", "False"),
+            new XAttribute("LockOwner", "0"),
+            new XAttribute("DogTag", newDog.ToString()),
+            new XAttribute("Flags", isProgram ? "1083423" : (st ? "1048607" : "1050655")),
+            new XAttribute("PPDFlags", "0"),
+            new XAttribute("EMOCRC32", "0"),
+            new XAttribute("ExtOptionFlags", "2"),
+            new XAttribute("CemEventInputs", "0"),
+            new XAttribute("CemActionOutputs", "0"));
+        string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        string none = "1970-01-01 00:00:00";
+        entry.Add(new XElement("Class",
+            new XAttribute("Embed", "ElemVersion"), new XAttribute("ClassType", "CTS2Version"),
+            new XAttribute("VerMajor", isProgram ? "1" : "1"), new XAttribute("VerMinor", isProgram ? "0" : "1"),
+            new XAttribute("VerLocked", "False"), new XAttribute("ProjectFileStatus", "0"),
+            new XAttribute("eventType", "0"), new XAttribute("eventId", "0"),
+            new XAttribute("date", now), new XAttribute("user", "1")));
+        foreach (var ev in new[] { "EventCompiled", "EventConnectionsChanged", "EventLocked" })
+            entry.Add(new XElement("Class",
+                new XAttribute("Embed", ev), new XAttribute("ClassType", "CTS2Event"),
+                new XAttribute("eventType", "0"), new XAttribute("eventId", "0"),
+                new XAttribute("date", none), new XAttribute("user", "0")));
+        entry.Add(new XElement("Class",
+            new XAttribute("Embed", "EventCreated"), new XAttribute("ClassType", "CTS2Event"),
+            new XAttribute("eventType", "0"), new XAttribute("eventId", "0"),
+            new XAttribute("date", now), new XAttribute("user", "1")));
+        entry.Add(new XElement("Class",
+            new XAttribute("Embed", "EventPrinted"), new XAttribute("ClassType", "CTS2Event"),
+            new XAttribute("eventType", "0"), new XAttribute("eventId", "0"),
+            new XAttribute("date", none), new XAttribute("user", "0")));
+        entry.Add(new XElement("Class",
+            new XAttribute("Embed", "EventModified"), new XAttribute("ClassType", "CTS2Event"),
+            new XAttribute("eventType", "0"), new XAttribute("eventId", "0"),
+            new XAttribute("date", now), new XAttribute("user", "1")));
+        entry.Add(new XElement("Class",
+            new XAttribute("Embed", "RefTrigger"), new XAttribute("ClassType", "CTS2XrefXml"),
+            new XAttribute("DogTag", "0"), new XAttribute("EventId", "0"), new XAttribute("Date", none)));
+        entry.Add(new XElement("Collection",
+            new XAttribute("Name", "XrefList"), new XAttribute("ClassType", "CTS2Xref"),
+            new XAttribute("CollectionType", "1")));
+        entry.Add(new XElement("Collection",
+            new XAttribute("Name", "UnresolvedTagnames"), new XAttribute("ClassType", "xCString"),
+            new XAttribute("CollectionType", "2"), new XAttribute("IsMemberBase", "1")));
+        entry.Add(new XElement("Collection",
+            new XAttribute("Name", "Declarations"), new XAttribute("ClassType", "CTS2Vars"),
+            new XAttribute("CollectionType", "1")));
+        elements.Add(entry);
+        // TriStation stores NextElementDogTag as the last used tag (not last + 1).
+        root.SetAttributeValue("NextElementDogTag", newDog.ToString());
+
+        tree[px] = ("Current/Project.xml", SerializeProject(root));
+
+        string streamExt = st ? ".ST" : ".FBD";
+        var streams = new List<(string, byte[])>
+        {
+            ($"Current/Elements/{newName}/{newFName}{streamExt}", Array.Empty<byte>()),
+            ($"Current/Elements/{newName}/{newFName}{streamExt}_crc", Array.Empty<byte>()),
+        };
+        tree.AddRange(streams);
+        return new InsertResult
+        {
+            DogTag = newDog,
+            FName = newFName,
+            Extension = streamExt,
+            Donor = "",
+            Streams = streams.Select(s => s.Item1).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Removes a catalog entry (and reports its FName) so an element folder can be
+    /// rebuilt deterministically against a blank base.
+    /// </summary>
+    public static string? Remove(List<(string Path, byte[] Data)> tree, string name)
+    {
+        int px = tree.FindIndex(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase));
+        if (px < 0) return null;
+        var doc = XDocument.Parse(Encoding.UTF8.GetString(tree[px].Data), LoadOptions.PreserveWhitespace);
+        var root = doc.Root;
+        if (root == null) return null;
+        var elements = root.Descendants().FirstOrDefault(e =>
+            e.Name.LocalName == "Collection" && (string?)e.Attribute("Name") == "Elements");
+        if (elements == null) return null;
+        var entry = elements.Elements().FirstOrDefault(e =>
+            e.Name.LocalName == "Class" &&
+            string.Equals((string?)e.Attribute("ElemName"), name, StringComparison.OrdinalIgnoreCase));
+        if (entry == null) return null;
+        string? fname = (string?)entry.Attribute("FName");
+        entry.Remove();
+        int maxDog = 0;
+        foreach (var e in elements.Elements().Where(e => e.Name.LocalName == "Class"))
+            if (int.TryParse((string?)e.Attribute("DogTag"), out int d) && d > maxDog) maxDog = d;
+        root.SetAttributeValue("NextElementDogTag", maxDog.ToString());
+        tree[px] = ("Current/Project.xml", SerializeProject(root));
+        return fname;
+    }
+
     public static InsertResult Insert(
         List<(string Path, byte[] Data)> tree,
         string newName,
@@ -116,7 +268,11 @@ public static class AddPou
                 src = cand.FirstOrDefault(e => !string.Equals((string?)e.Attribute("ElementType"), "1", StringComparison.OrdinalIgnoreCase))
                       ?? cand.FirstOrDefault();
             if (src == null)
-                throw new InvalidOperationException($"no catalog element with Extension {requireExt} to use as donor");
+            {
+                // No same-language donor exists (a blank base ships only ST library
+                // elements): synthesise the entry the way TriStation's importer does.
+                return InsertSynth(tree, newName, requireElementType == 1, requireExt);
+            }
         }
         else throw new InvalidOperationException("donor or requireExt must be supplied");
 
@@ -144,9 +300,7 @@ public static class AddPou
         root.SetAttributeValue("NextElementDogTag", newDog.ToString());
 
         tree[tree.FindIndex(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase))] =
-            ("Current/Project.xml",
-             Encoding.UTF8.GetBytes("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-                                    root.ToString(SaveOptions.DisableFormatting) + "\n"));
+            ("Current/Project.xml", SerializeProject(root));
 
         // ---- element streams clone (language stream + its _crc only) ----
         string donorName = (string?)src.Attribute("ElemName") ?? "";

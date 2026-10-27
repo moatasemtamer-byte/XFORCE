@@ -9,11 +9,10 @@ namespace TriconexToTia.Engine.Ladder;
 /// <c>Network #    23:        Size:   109 bytes PROGRAM=DIAGNOSTICS</c>.
 /// </summary>
 /// <remarks>
-/// The grouping is a literal field in the listing, so when it is present the mapping is
-/// exact — no inference is performed. A network without its own <c>PROGRAM=</c> belongs to
-/// the most recent program seen above it. When the listing carries no <c>PROGRAM=</c> at all
-/// (an uncategorized export) the result is empty and the caller keeps the existing
-/// single-program behaviour.
+/// The grouping is a literal field in the listing, so when it is present the mapping is exact.
+/// A network without its own <c>PROGRAM=</c> belongs to the most recent program seen above it.
+/// When the listing carries no <c>PROGRAM=</c> at all (an uncategorized export) the result is
+/// empty and the caller keeps the single-program behaviour.
 /// </remarks>
 public static class LptProgramMap
 {
@@ -27,73 +26,70 @@ public static class LptProgramMap
         @"PROGRAM\s*=\s*(?<name>[A-Za-z0-9_\-]+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public sealed record Group(string Name, int FirstNetwork, int LastNetwork);
+    /// <summary>One network header in listing order. <paramref name="Program"/> is the name on the
+    /// header itself (null when the header carries no tag).</summary>
+    public sealed record Header(int Network, string? Program);
 
-    public static bool HasProgramTags(byte[] bytes) =>
-        ProgramTagRe.IsMatch(Decode(bytes));
-
-    /// <summary>Consecutive network ranges, in order, each under one program name.</summary>
-    public static List<Group> Groups(byte[] bytes)
+    /// <summary>Network headers in the order they appear, with the tags they carry.</summary>
+    public static List<Header> Headers(byte[] bytes)
     {
         var text = Decode(bytes).Replace("\r\n", "\n").Replace('\r', '\n');
-        var groups = new List<Group>();
-        string? current = null;
-        int first = 0, last = 0;
-
+        var headers = new List<Header>();
         foreach (var line in text.Split('\n'))
         {
             var header = NetworkHeaderRe.Match(line);
             if (!header.Success) continue;
-            int network = int.Parse(header.Groups["n"].Value);
+            if (!int.TryParse(header.Groups["n"].Value, out var network)) continue;
             var tag = ProgramTagRe.Match(header.Groups["tail"].Value);
-            if (!tag.Success) continue; // no label on this network: stays with current group
-            var name = tag.Groups["name"].Value;
-
-            if (current is null)
-            {
-                current = name;
-                first = network;
-                last = network;
-            }
-            else if (!name.Equals(current, StringComparison.Ordinal))
-            {
-                groups.Add(new Group(current, first, last));
-                current = name;
-                first = network;
-                last = network;
-            }
-            else
-            {
-                last = network;
-            }
+            headers.Add(new Header(network, tag.Success ? tag.Groups["name"].Value : null));
         }
-
-        if (current is not null) groups.Add(new Group(current, first, last));
-        return groups;
+        return headers;
     }
 
     /// <summary>Maps each network number to its program name (empty when uncategorized).</summary>
     public static Dictionary<int, string> NetworkToProgram(byte[] bytes)
     {
-        var text = Decode(bytes).Replace("\r\n", "\n").Replace('\r', '\n');
         var map = new Dictionary<int, string>();
         string? current = null;
-        foreach (var line in text.Split('\n'))
+        foreach (var header in Headers(bytes))
         {
-            var header = NetworkHeaderRe.Match(line);
-            if (!header.Success) continue;
-            var tag = ProgramTagRe.Match(header.Groups["tail"].Value);
-            if (tag.Success) current = tag.Groups["name"].Value;
-            if (current is not null) map[int.Parse(header.Groups["n"].Value)] = current;
+            if (header.Program is not null) current = header.Program;
+            if (current is not null) map[header.Network] = current;
         }
         return map;
     }
 
+    /// <summary>Program name for every header in listing order, carrying the previous tag forward.
+    /// Used when network numbers repeat across programs, where a number-keyed map would collide.</summary>
+    public static List<string?> ProgramSequence(byte[] bytes)
+    {
+        var result = new List<string?>();
+        string? current = null;
+        foreach (var header in Headers(bytes))
+        {
+            if (header.Program is not null) current = header.Program;
+            result.Add(current);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Decodes a listing without corrupting non-ASCII bytes: BOM first, then strict UTF-8, then
+    /// Latin-1 (a byte-preserving fallback). <see cref="Encoding.UTF8"/> alone never throws, so a
+    /// Windows-1252 listing would silently turn every accented byte into U+FFFD.
+    /// </summary>
     private static string Decode(byte[] bytes)
     {
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
             return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
-        try { return Encoding.UTF8.GetString(bytes); }
-        catch { return Encoding.ASCII.GetString(bytes); }
+        try
+        {
+            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return Encoding.Latin1.GetString(bytes);
+        }
     }
 }

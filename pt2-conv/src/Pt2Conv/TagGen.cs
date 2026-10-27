@@ -56,19 +56,6 @@ public static class TagGen
         var src = SourceMap();
         var shared = tmpl.Keys.Where(xmlTags.ContainsKey).ToList();
 
-        // Per-column default: the most common non-empty value in the template, so that
-        // every emitted cell uses a value already in the tool's vocabulary (syntactically
-        // valid) rather than an empty string TriStation may reject.
-        var placeholders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var c in cols)
-        {
-            int ci = Col(cols, c);
-            var modal = tmpl.Values.Select(r => ci < r.Count ? r[ci] : "")
-                .Where(x => x.Length > 0)
-                .GroupBy(x => x).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
-            if (modal != null) placeholders[c] = modal;
-        }
-
         int addrField = Col(cols, "Address");
         int physField = Col(cols, "PhysicalAddress");
 
@@ -97,13 +84,21 @@ public static class TagGen
             foreach (var c in cols)
             {
                 string val;
+                int ci = Col(cols, c);
                 if (src.TryGetValue(c, out var m))
                 {
                     if (m.Key == "@name") { fields.Add(name); continue; }
                     val = flat.TryGetValue(m.Key, out var v) ? Transform(m.Value, v) : "";
                 }
-                else val = "";
-                if (val.Length == 0 && placeholders.TryGetValue(c, out var ph)) val = ph;
+                else
+                {
+                    // Columns with no XML source keep the target project's own value for
+                    // this tag (TriStation preserves them across an import), falling back
+                    // to the column's modal value for tags the template does not know.
+                    val = tmpl.TryGetValue(name, out var trow) && ci >= 0 && ci < trow.Count ? trow[ci] : "";
+                }
+                if (val.Length == 0 && tmpl.TryGetValue(name, out var trow2) && ci >= 0 && ci < trow2.Count)
+                    val = trow2[ci];
                 fields.Add(val);
             }
 
@@ -149,7 +144,7 @@ public static class TagGen
                         tot++;
                         int ci = Col(cols, c);
                         string got = Transform(m.Value, xv);
-                        if (got.Length == 0 && placeholders.TryGetValue(c, out var ph2)) got = ph2;
+                        if (got.Length == 0 && ci < tmpl[n].Count) got = tmpl[n][ci];
                         if (Eq(tmpl[n][ci], got)) ok++;
                     }
                     match = $"{ok}/{tot}";
@@ -339,7 +334,7 @@ public static class TagGen
         Tx.IoModule => v.Equals("NA", StringComparison.OrdinalIgnoreCase) ? "0" : v,
         Tx.Filter => v.Equals("NONE", StringComparison.OrdinalIgnoreCase) ? "0" : v,
         Tx.ClassEnum => v.Equals("USER_DEFINED", StringComparison.OrdinalIgnoreCase) ? "3" : v,
-        Tx.AppSafety => (v.Equals("Safety", StringComparison.OrdinalIgnoreCase) || v.Equals("Control", StringComparison.OrdinalIgnoreCase)) ? "True" : "False",
+        Tx.AppSafety => v.Equals("Safety", StringComparison.OrdinalIgnoreCase) ? "True" : "False",
         Tx.AppControl => v.Equals("Control", StringComparison.OrdinalIgnoreCase) ? "True" : "False",
         Tx.Mem => v.Equals("MEMORY", StringComparison.OrdinalIgnoreCase) ? "True" : "False",
         Tx.PointInput => v.Contains("INPUT", StringComparison.OrdinalIgnoreCase) ? "True" : "False",
@@ -347,8 +342,15 @@ public static class TagGen
         Tx.PointLocation => v.Equals("MEMORY", StringComparison.OrdinalIgnoreCase) ? "1"
                           : v.Contains("INPUT", StringComparison.OrdinalIgnoreCase) ? "2"
                           : v.Contains("OUTPUT", StringComparison.OrdinalIgnoreCase) ? "3" : v,
-        Tx.AliasType => "1",
-        Tx.AliasSel => v.Equals("NO_ALIAS", StringComparison.OrdinalIgnoreCase) ? "0" : "1",
+        Tx.AliasType => v.ToUpperInvariant() switch
+        {
+            "UNALIASED" => "1",
+            "READ_ALIASED" => "2",
+            "READWRITE_ALIASED" => "3",
+            _ => "1",
+        },
+        Tx.AliasSel => v.Equals("NO_ALIAS", StringComparison.OrdinalIgnoreCase) ? "0"
+                      : v.Equals("USER_ALIAS", StringComparison.OrdinalIgnoreCase) ? "2" : "1",
         Tx.F6 => double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
                  ? Math.Round(d, 3).ToString("F6", CultureInfo.InvariantCulture) : v,
         _ => v,
@@ -385,18 +387,18 @@ public static class TagGen
             var ty = Regex.Match(body, "<type>\\s*<([A-Za-z_][\\w.:]*)");
             flat["@type"] = ty.Success ? ty.Groups[1].Value : "";
             var doc = Regex.Match(body, "(?s)<documentation><!\\[CDATA\\[(.*?)\\]\\]></documentation>");
-            flat["@documentation"] = doc.Success ? doc.Groups[1].Value : "";
+            flat["@documentation"] = doc.Success ? doc.Groups[1].Value.Trim().Replace("\"", "") : "";
             var iv = Regex.Match(body, "<simpleValue\\s+value=\"([^\"]*)\"");
             flat["@initial"] = iv.Success ? iv.Groups[1].Value : "";
             foreach (Match e in Regex.Matches(tn.Groups[1].Value, "<ts:([A-Za-z_]\\w*)([^>]*?)(/?)>"))
             {
                 string elem = e.Groups[1].Value;
                 foreach (Match a in Regex.Matches(e.Groups[2].Value, "([A-Za-z_]\\w*)=\"([^\"]*)\""))
-                    flat[elem + "." + a.Groups[1].Value] = a.Groups[2].Value;
+                    flat[elem + "." + a.Groups[1].Value] = a.Groups[2].Value.Trim();
                 if (e.Groups[3].Value != "/")
                 {
                     var txt = Regex.Match(tn.Groups[1].Value, $"<ts:{elem}[^>]*>([^<]*)</ts:{elem}>");
-                    if (txt.Success) flat[elem + ".#text"] = txt.Groups[1].Value;
+                    if (txt.Success) flat[elem + ".#text"] = txt.Groups[1].Value.Trim();
                 }
             }
             result[m.Groups[1].Value] = flat;

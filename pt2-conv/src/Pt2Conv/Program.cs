@@ -31,6 +31,8 @@ public static class Program
                 "topdf" => ToPdf.Run(args),
                 "toreport" => ToReport.Run(args),
                 "genfbd" => FbdGenerator.Run(args),
+                "captureboard" => HwConfig.Capture(args),
+                "capturehw" => HwCapture.Run(args),
                 "genst" => StGenerator.Run(args),
                 "gendoc" => DocGenerator.Run(args),
                 "analyze" => Analyze.Run(args),
@@ -98,8 +100,12 @@ Commands:
   diff   <a.pt2x> <b.pt2x>             Stream-level diff between two container files.
   crc    <file.pt2x>                   Print raw container summary (STEP-1 style).
   selftest                             Extract->rebuild->re-extract round-trip test.
-  buildxml <xml> <out.pt2x>            [in-progress] Build project container from PLCopen XML.
-                                       With no <refExtractDir>, uses the embedded generic base.
+  buildxml <xml> <out.pt2x> [<refExtractDir>] [<pouFilter>] [--tags] [--insert] [--export]
+                                       Build a project container from PLCopen XML. With no
+                                       <refExtractDir> it uses the embedded blank project
+                                       (library + hardware scaffold, no POUs), synthesises
+                                       the catalog entries TriStation's importer creates,
+                                       and regenerates every POU + Tagnames.csv.
   fromsimatic <dir|file> <out.xml>     Translate SimaticML block exports (FBD) + tag table into
                                        the TriStation PLCopen XML that buildxml consumes.
   frompt2 <project.pt2x> <out.xml>     Decompile a TriStation .pt2/.pt2x container (.FBD/.ST

@@ -72,6 +72,7 @@ public static class PdfGenerator
         var doc = new PdfDocument();
         DrawInto(doc, project);
         doc.Save(outPath);
+        PdfPostProcess.NormalizeFontSubsetTags(outPath);
     }
 
     /// <summary>
@@ -82,7 +83,21 @@ public static class PdfGenerator
     public static void DrawInto(PdfDocument doc, PdfProject project)
     {
         if (string.IsNullOrWhiteSpace(doc.Info.Title))
-            doc.Info.Title = string.IsNullOrWhiteSpace(project.Name) ? "TriStation FBD" : project.Name;
+        {
+            // The PDF title is metadata only (the visible title block uses the sheet macros).
+            // Derive it from the project content, not the uploaded file name, so two prints of
+            // the same project are identical regardless of what the file is called.
+            string desc = (project.Description ?? "").Split('\n', '\r')
+                .Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+            string title = desc.Length > 0 ? desc
+                : !string.IsNullOrWhiteSpace(project.ShortName) ? project.ShortName
+                : project.Name;
+            doc.Info.Title = string.IsNullOrWhiteSpace(title) ? "TriStation FBD" : title;
+        }
+        if (DateTime.TryParseExact(project.Created, "yyyy-MM-dd HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var created))
+            doc.Info.CreationDate = created;
         doc.Info.Creator = "pt2conv";
 
         bool any = false;
@@ -450,6 +465,29 @@ public static class PdfGenerator
         double bodyTop = fn ? e.Y : e.Y + BlockStripH + BlockGap;
         double bodyH = fn ? e.H : Math.Max(12, e.H - BlockStripH - BlockGap);
 
+        // Double-space blocks (the timer family) lay their pins out two rows apart.
+        // The step comes from the container's own pin layout, never from the block
+        // type, so every double-space block lines up with its wires.
+        double pinStep = e.DoubleSpace ? 2 * BlockPinStep : BlockPinStep;
+
+        // The container normally stores the block height, but older exports can keep
+        // the small default box even when the block has many pins. Keep the stored
+        // height while it still contains the pins; otherwise grow the body from the
+        // same header/pin geometry used to place the pins.
+        int pinCount = Math.Max(e.Inputs.Count, e.Outputs.Count);
+        if (pinCount > 0)
+        {
+            double lastInput = e.Inputs.Count > 0
+                ? BlockPinRow + (e.Inputs.Count - 1) * pinStep
+                : 0;
+            double lastOutput = e.Outputs.Count > 0
+                ? BlockPinRow + (e.Outputs.Count - 1) * pinStep + (BlockOutName - BlockPinRow)
+                : 0;
+            double needed = Math.Max(lastInput, lastOutput);
+            if (bodyH < needed)
+                bodyH = BlockPinRow + pinCount * pinStep;
+        }
+
         if (!fn)
         {
             gfx.DrawRectangle(Ink1, WhiteBrush, e.X, e.Y, e.W, BlockStripH);
@@ -465,7 +503,7 @@ public static class PdfGenerator
         var pinFont = new XFont(FontFamily, 11);
         for (int i = 0; i < e.Inputs.Count; i++)
         {
-            double row = bodyTop + BlockPinRow + i * BlockPinStep;
+            double row = bodyTop + BlockPinRow + i * pinStep;
             DrawBaseline(gfx, e.Inputs[i].Name, pinFont, InkBrush, e.X + 3, row - (BlockPinRow - BlockInName), false);
             gfx.DrawLine(Ink1, e.X - BlockPinGap, row - 4.1, e.X - BlockPinGap, row + 4.1);
             gfx.DrawLine(Ink1, e.X - BlockPinGap, row, e.X - BlockPinHook, row);
@@ -473,7 +511,7 @@ public static class PdfGenerator
         }
         for (int i = 0; i < e.Outputs.Count; i++)
         {
-            double row = bodyTop + BlockPinRow + i * BlockPinStep;
+            double row = bodyTop + BlockPinRow + i * pinStep;
             var sz = gfx.MeasureString(e.Outputs[i], pinFont);
             DrawBaseline(gfx, e.Outputs[i], pinFont, InkBrush, e.X + e.W - 3 - sz.Width,
                 row + (BlockOutName - BlockPinRow), false);
@@ -493,20 +531,58 @@ public static class PdfGenerator
 
     private static void DrawTerminal(XGraphics gfx, PdfVarElem e)
     {
-        bool tall = e.H >= 2 * TerminalNameH;
-        double nx = tall ? e.X + TerminalNameInset : e.X;
-        double nw = tall ? e.W - 2 * TerminalNameInset : e.W;
-        double nh = tall ? TerminalNameH : e.H;
-
-        gfx.DrawRectangle(Ink1, WhiteBrush, nx, e.Y, nw, nh);
-
         var nameFont = new XFont(FontFamily, 13);
-        DrawBaseline(gfx, e.Name, nameFont, InkBrush, nx + nw / 2, e.Y + nh / 2 + 5.7, true);
 
-        // The pin of the terminal is a small square at the end of its wire.
-        double pinY = e.Y + nh / 2;
-        if (e.HasInWire) gfx.DrawRectangle(Ink1, e.X - TerminalPinGap + 0.4, pinY - 2.55, 4.6, 5.1);
-        if (e.HasOutWire) gfx.DrawRectangle(Ink1, e.X + e.W + TerminalPinGap - 5.0, pinY - 2.55, 4.6, 5.1);
+        // A constant is not a tag: TriStation prints it as a plain rectangle with a
+        // short pin stub. The container marks it with varType="CONSTANT".
+        if (e.IsConstant)
+        {
+            gfx.DrawRectangle(Ink1, WhiteBrush, e.X, e.Y, e.W, e.H);
+            double cy = e.Y + e.H / 2;
+            DrawBaseline(gfx, e.Name, nameFont, InkBrush, e.X + e.W / 2, cy + 5.7, true);
+            double stub = e.H / 2;
+            if (e.HasInWire) gfx.DrawLine(Ink1, e.X - stub, cy, e.X, cy);
+            if (e.HasOutWire) gfx.DrawLine(Ink1, e.X + e.W, cy, e.X + e.W + stub, cy);
+            return;
+        }
+
+        bool tall = e.H >= 2 * TerminalNameH;
+        double nh = tall ? TerminalNameH : e.H;
+        double capR = nh / 2;
+        // The stored width already includes the two end caps. Inset the white body
+        // by the cap radius so the pill spans exactly the element's own bounds.
+        double nx = tall ? e.X + TerminalNameInset : e.X + capR;
+        double nw = tall ? e.W - 2 * TerminalNameInset : Math.Max(1, e.W - 2 * capR);
+
+        // TriStation draws every tag kind (local, input, output, memory) as a pill:
+        // a white body closed by a black half-disc at each end. The pin (and the
+        // wire) sits on the centre line.
+        double pinY = e.Y + capR;
+        DrawHalfDisc(gfx, nx, pinY, capR, left: true);
+        DrawHalfDisc(gfx, nx + nw, pinY, capR, left: false);
+        gfx.DrawRectangle(WhiteBrush, nx, e.Y, nw, nh);
+        gfx.DrawLine(Ink1, nx, e.Y, nx + nw, e.Y);
+        gfx.DrawLine(Ink1, nx, e.Y + nh, nx + nw, e.Y + nh);
+
+        DrawBaseline(gfx, e.Name, nameFont, InkBrush, nx + nw / 2, pinY + 5.7, true);
+
+        // The tag's connector is a solid square joined to the end cap by a short
+        // wire-coloured stub. The stub uses the square's actual near edge, so the
+        // chain body -> cap -> stub -> square -> wire has no gap.
+        const double pinSquare = 4.6;
+        const double pinSquareH = 5.1;
+        if (e.HasInWire)
+        {
+            double sx = e.X - TerminalPinGap + 0.4;
+            gfx.DrawLine(WirePen, e.X, pinY, sx + pinSquare, pinY);
+            gfx.DrawRectangle(Ink1, InkBrush, sx, pinY - pinSquareH / 2, pinSquare, pinSquareH);
+        }
+        if (e.HasOutWire)
+        {
+            double sx = e.X + e.W + TerminalPinGap - 5.0;
+            gfx.DrawLine(WirePen, e.X + e.W, pinY, sx, pinY);
+            gfx.DrawRectangle(Ink1, InkBrush, sx, pinY - pinSquareH / 2, pinSquare, pinSquareH);
+        }
 
         if (!e.Annotate) return;
 
@@ -522,6 +598,15 @@ public static class PdfGenerator
             DrawBaseline(gfx, line.Trim(), annFont, InkBrush, e.X + 5.3, y, false);
             y += 14;
         }
+    }
+
+    /// <summary>Strokes one semicircular end cap of a tag block. The cap is outline only:
+    /// the arc joins the tag body's top and bottom lines, so no flat side or fill is drawn.</summary>
+    private static void DrawHalfDisc(XGraphics gfx, double cx, double cy, double r, bool left)
+    {
+        var path = new XGraphicsPath();
+        path.AddArc(new XRect(cx - r, cy - r, 2 * r, 2 * r), left ? 90 : 270, 180);
+        gfx.DrawPath(Ink1, path);
     }
 
     // ---- comments -----------------------------------------------------------

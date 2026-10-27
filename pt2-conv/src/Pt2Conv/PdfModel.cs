@@ -16,6 +16,8 @@ public sealed class PdfProject
     public string ShortName = "";
     /// <summary>The project's version, e.g. "1.0" (ProjectInfo/ProjectInfo.Xml).</summary>
     public string Version = "";
+    /// <summary>The project's creation timestamp (ProjectInfo/ProjectInfo.Xml), if present.</summary>
+    public string Created = "";
     /// <summary>Project level macro values (company info, user, project version).</summary>
     public Dictionary<string, string> Macros = new(StringComparer.Ordinal);
     /// <summary>The sheet templates found in the container, keyed by their element name.</summary>
@@ -96,6 +98,9 @@ public sealed class PdfBlockElem : PdfElem
     public string TypeName = "";
     public string Instance = "";
     public bool IsFunction;
+    /// <summary>The container's doubleSpace flag: the pins sit two rows (40 units) apart
+    /// instead of one (20 units). Timer blocks (TON/TOF/TP/TDE_I...) use it.</summary>
+    public bool DoubleSpace;
     public List<PdfPin> Inputs = new();
     public List<string> Outputs = new();
 }
@@ -104,6 +109,9 @@ public sealed class PdfVarElem : PdfElem
 {
     public string Name = "";
     public string VarType = "";
+    /// <summary>The container's varType="CONSTANT" flag: constants use the plain
+    /// rectangular symbol, while every tag kind uses the pill symbol.</summary>
+    public bool IsConstant;
     public string Annotation = "";
     public bool Annotate;
     public bool HasInWire;

@@ -22,11 +22,12 @@ public static class ToReport
             Console.Error.WriteLine("  --report: render only one report whose title contains <name> (e.g. tagnames)");
             Console.Error.WriteLine("  --mode:   fbd = FBD sheets only, reports = report suite only, both = FBD then reports (default: reports)");
             Console.Error.WriteLine("  --dump-text <file>: write every string the renderer draws (debug/verification)");
+            Console.Error.WriteLine("  --layout-dump <file>: write the page/row/cell/text geometry as TSV (debug/verification)");
             return 1;
         }
 
         string input = args[1], outPath = args[2];
-        string? nameArg = null, reportArg = null, dumpArg = null;
+        string? nameArg = null, reportArg = null, dumpArg = null, layoutArg = null;
         var mode = Mode.Reports;
         for (int i = 3; i < args.Length; i++)
         {
@@ -35,12 +36,14 @@ public static class ToReport
                 case "--name": if (i + 1 < args.Length) nameArg = args[++i]; break;
                 case "--report": if (i + 1 < args.Length) reportArg = args[++i]; break;
                 case "--dump-text": if (i + 1 < args.Length) dumpArg = args[++i]; break;
+                case "--layout-dump": if (i + 1 < args.Length) layoutArg = args[++i]; break;
                 case "--mode": if (i + 1 < args.Length && !TryParseMode(args[++i], out mode)) return UsageError($"unknown --mode '{args[i]}'"); break;
             }
         }
 
         var data = FromPt2.BuildReportData(input, nameArg);
         ReportRenderer.Trace = dumpArg != null;
+        ReportRenderer.LayoutTrace = layoutArg != null;
 
         long bytes;
         string summary;
@@ -50,6 +53,7 @@ public static class ToReport
             PdfGenerator.DrawInto(doc, FromPt2.BuildPdfModel(input, nameArg));
             ReportRenderer.RenderInto(doc, data, reportArg);
             doc.Save(outPath);
+            PdfPostProcess.NormalizeFontSubsetTags(outPath);
             bytes = new FileInfo(outPath).Length;
             summary = $"FBD sheets + report suite ({doc.PageCount} pages)";
         }
@@ -73,6 +77,13 @@ public static class ToReport
         {
             File.WriteAllLines(dumpArg, ReportRenderer.DumpText());
             Console.WriteLine($"Dumped {ReportRenderer.DumpText().Count} drawn strings to {dumpArg}");
+        }
+
+        if (layoutArg != null)
+        {
+            var layout = ReportRenderer.DumpLayout();
+            File.WriteAllLines(layoutArg, layout);
+            Console.WriteLine($"Dumped {layout.Count} layout entries to {layoutArg}");
         }
 
         Console.WriteLine($"Wrote {outPath} ({bytes:N0} bytes): {summary}");

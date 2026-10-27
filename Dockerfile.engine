@@ -33,8 +33,13 @@ FROM mcr.microsoft.com/dotnet/aspnet:7.0-jammy AS runtime
 
 # EPPlus 4 (used by the BL reader) can reach into System.Drawing on some code paths, so keep
 # GDI+ available instead of discovering that at runtime.
+#
+# PdfSharpCore resolves the report templates' Arial/Times New Roman/Courier New through
+# fontconfig on Linux. Liberation Sans/Serif/Mono are metric-compatible with those fonts and
+# Ubuntu's fontconfig aliases the Windows names onto them, so the printed layout matches the
+# Windows build instead of failing with "no appropriate font".
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libgdiplus \
+ && apt-get install -y --no-install-recommends libgdiplus fontconfig fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out /opt

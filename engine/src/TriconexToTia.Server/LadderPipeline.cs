@@ -96,9 +96,12 @@ public static class LadderPipeline
 
             var stem = Path.Combine(work, "listing");
             reportStage?.Invoke("circuit-reader");
+            var readerClock = Stopwatch.StartNew();
             var (exit, output) = await RunAsync(circuitReader, cancellationToken,
                 "analyze", sourcePath, "--format", "tristation", "--out", stem);
+            readerClock.Stop();
             report.AppendLine(output);
+            report.AppendLine($"circuit-reader: {readerClock.Elapsed.TotalSeconds:F1}s");
 
             var listingPath = stem + ".tristation";
             if (exit != 0 || !File.Exists(listingPath))
@@ -107,12 +110,14 @@ public static class LadderPipeline
                     $"circuit-reader exited with code {exit} and produced no listing.");
             }
 
-            var equations = ParseListing(await File.ReadAllLinesAsync(listingPath, cancellationToken));
+            var equations = ParseListing(await File.ReadAllLinesAsync(listingPath, cancellationToken), out int ignoredLines);
             if (equations.Count == 0)
             {
                 return new Result(false, null, report.ToString(),
                     "circuit-reader produced an empty equation listing.");
             }
+            report.AppendLine($"equations: {equations.Count} row(s)" +
+                              (ignoredLines > 0 ? $", {ignoredLines} non-row line(s) ignored" : ""));
 
             var ladderCli = ResolveTool("MSW_LADDERCLI_PATH", new[]
             {
@@ -153,17 +158,18 @@ public static class LadderPipeline
 
     // The TRISTATION functional listing is tab-separated: "<network #>\t<logic>" with a
     // "Networks #\tLogic" header.  Emit it as (logic, network) pairs for the workbook.
-    private static List<(string Logic, string Network)> ParseListing(string[] lines)
+    private static List<(string Logic, string Network)> ParseListing(string[] lines, out int ignored)
     {
         var rows = new List<(string Logic, string Network)>();
+        ignored = 0;
         foreach (var line in lines)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
             var tab = line.IndexOf('\t');
-            if (tab <= 0) continue;
+            if (tab <= 0) { ignored++; continue; }
             var network = line.Substring(0, tab).Trim();
             var logic = line.Substring(tab + 1).Trim();
-            if (logic.Length == 0) continue;
+            if (logic.Length == 0) { ignored++; continue; }
             if (string.Equals(network, "Networks #", StringComparison.OrdinalIgnoreCase)) continue; // header
             rows.Add((logic, network));
         }
@@ -176,51 +182,86 @@ public static class LadderPipeline
 
     /// <summary>
     /// Splits the equation rows into TriStation programs using the <c>PROGRAM=</c> tags in the
-    /// original listing. Returns a single unnamed group when the listing is uncategorized.
+    /// original listing. Rows are grouped by program name across the whole listing (a program
+    /// whose networks resume later still stays one group), preserving first-appearance order.
     /// </summary>
     private static List<BlGroup> BuildGroups(
         List<(string Logic, string Network)> equations, byte[]? originalListing, out string note)
     {
-        if (originalListing is null || !LptProgramMap.HasProgramTags(originalListing))
+        var single = new List<BlGroup> { new(null, equations) };
+        if (originalListing is null)
         {
-            note = "grouping: none (listing carries no PROGRAM= tags); one program";
-            return new List<BlGroup> { new(null, equations) };
+            note = "grouping: none (no listing); one program";
+            return single;
         }
 
+        var headers = LptProgramMap.Headers(originalListing);
         var networkToProgram = LptProgramMap.NetworkToProgram(originalListing);
-        var groups = new List<BlGroup>();
-        string? current = null;
-        List<(string Logic, string Network)> bucket = new();
-
-        void Flush()
+        if (networkToProgram.Count == 0)
         {
-            if (bucket.Count > 0) groups.Add(new BlGroup(current, bucket));
-            bucket = new();
+            note = "grouping: none (the listing has no PROGRAM= tags); one program";
+            return single;
         }
 
-        foreach (var row in equations)
+        // Network numbers are normally unique; when two programs both use e.g. "#1" a number-keyed
+        // map would collide, so align by listing order instead (the exporter keeps both in order).
+        List<string?>? sequence = null;
+        string extra = "";
+        if (headers.Select(h => h.Network).Distinct().Count() != headers.Count)
         {
-            string? name = null;
-            if (int.TryParse(row.Network, out var n) && networkToProgram.TryGetValue(n, out var mapped))
-                name = mapped;
+            var candidate = LptProgramMap.ProgramSequence(originalListing);
+            if (candidate.Count == equations.Count)
+            {
+                sequence = candidate;
+                extra = " (duplicate network numbers: grouped by listing order)";
+            }
+            else
+            {
+                extra = $" (warning: {headers.Count} network header(s) vs {equations.Count} equation row(s); grouped by number)";
+            }
+        }
 
+        var order = new List<string>();
+        var buckets = new Dictionary<string, List<(string Logic, string Network)>>(StringComparer.Ordinal);
+        string fallback = headers.Select(h => h.Program).FirstOrDefault(p => p is not null)
+                          ?? networkToProgram.OrderBy(kv => kv.Key).Select(kv => kv.Value).First();
+        string? current = null;
+        int unmapped = 0;
+
+        for (var index = 0; index < equations.Count; index++)
+        {
+            var row = equations[index];
+            string? name = sequence is not null
+                ? sequence[index]
+                : int.TryParse(row.Network, out var network) && networkToProgram.TryGetValue(network, out var mapped)
+                    ? mapped
+                    : null;
             if (name is null)
             {
-                // No program for this network: keep it with the run we are in.
-                bucket.Add(row);
-                continue;
+                unmapped++;
+                name = current ?? fallback; // keep the network order: a row without a tag stays with the previous program
             }
-
-            if (!string.Equals(name, current, StringComparison.Ordinal))
+            if (!buckets.TryGetValue(name, out var bucket))
             {
-                Flush();
-                current = name;
+                bucket = new List<(string Logic, string Network)>();
+                buckets[name] = bucket;
+                order.Add(name);
             }
             bucket.Add(row);
+            current = name;
         }
-        Flush();
 
-        note = $"grouping: {groups.Count} program(s) from PROGRAM= tags";
+        if (order.Count <= 1)
+        {
+            string only = order.Count == 1 ? order[0] : fallback;
+            note = $"grouping: one program ('{only}')" + extra;
+            return new List<BlGroup> { new(only, equations) };
+        }
+
+        var groups = new List<BlGroup>();
+        foreach (var name in order) groups.Add(new BlGroup(name, buckets[name]));
+        note = $"grouping: {groups.Count} programs from PROGRAM= tags" +
+               (unmapped > 0 ? $" ({unmapped} row(s) carried to the preceding program)" : "") + extra;
         return groups;
     }
 
@@ -246,22 +287,34 @@ public static class LadderPipeline
 
         var xmls = new List<byte[]>();
         var names = new List<string>();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < groups.Count; i++)
         {
             var group = groups[i];
-            var name = SanitizePouName(group.Name ?? ("PROGRAM_" + (i + 1)));
+            string baseName = SanitizePouName(group.Name ?? ("PROGRAM_" + (i + 1)));
+            // Sanitisation can collapse two different labels ("A-B" and "A_B"); keep the POU
+            // names unique so the merged project never carries a duplicate definition.
+            string name = baseName;
+            for (var suffix = 2; !used.Add(name); suffix++) name = baseName + "_" + suffix;
+            if (!string.Equals(name, group.Name, StringComparison.Ordinal))
+                report.AppendLine($"note: program '{group.Name}' imported as '{name}'");
 
             var wb = Path.Combine(work, $"functions_{i}.xlsx");
             BlFunctionsWorkbook.Write(group.Rows, wb);
             var xp = Path.Combine(work, $"ladder_{i}.xml");
+            var groupClock = Stopwatch.StartNew();
             var bytes = await RunOneAsync(ladderCli, wb, xp, dptPath, templatePath, report, reportStage, cancellationToken);
+            groupClock.Stop();
             if (bytes is null) return null;
+            RequireSingleGeneratedProgram(bytes, name);
             xmls.Add(bytes);
             names.Add(name);
-            report.AppendLine($"group {i + 1}/{groups.Count}: {name} ({group.Rows.Count} rows)");
+            report.AppendLine($"group {i + 1}/{groups.Count}: {name} ({group.Rows.Count} rows) in {groupClock.Elapsed.TotalSeconds:F1}s");
         }
 
-        return MergeProgramXml(xmls, names);
+        var merged = MergeProgramXml(xmls, names, report);
+        report.AppendLine($"project: {CountPrograms(merged)} program POU(s)");
+        return merged;
     }
 
     private static async Task<byte[]?> RunOneAsync(
@@ -288,42 +341,127 @@ public static class LadderPipeline
     }
 
     // BL emits the whole project template plus the one program it just built — always named
-    // "SeimensLogic" (the default in LadderTextOperations_safety.cs when no naming row is present).
-    // To stitch several runs into one project we keep the first run's XML as the base, rename its
-    // generated program, then for each later run rename its generated program and append only that
-    // POU. Template POUs (FBs, TEMPLATES, P01_FB) are identical across runs, so they are kept once.
-    private static byte[] MergeProgramXml(List<byte[]> xmls, List<string> names)
+    // "SeimensLogic" (the default in LadderTextOperations_safety.cs). To stitch several runs into
+    // one project we keep the first run's XML as the base, rename its generated program, then for
+    // each later run rename its generated program and append only that POU. Template POUs (FBs,
+    // TEMPLATES, P01_FB) are identical across runs, so they are kept once. Every rename is applied
+    // document-wide so task/resource references never keep pointing at the old name.
+    private static byte[] MergeProgramXml(List<byte[]> xmls, List<string> names, StringBuilder report)
     {
-        if (xmls.Count == 0) return Array.Empty<byte>();
-        if (xmls.Count == 1) return xmls[0];
+        if (xmls.Count == 0) throw new InvalidOperationException("The ladder reader produced no XML.");
 
-        var baseDoc = new XmlDocument { PreserveWhitespace = true };
-        baseDoc.LoadXml(Encoding.UTF8.GetString(StripBom(xmls[0])));
-        var pous = baseDoc.SelectSingleNode("//*[local-name()='types']/*[local-name()='pous']")
-            ?? throw new InvalidOperationException("BL output has no project/types/pous container.");
-
+        var baseDoc = Load(xmls[0]);
         var generated = FindGeneratedProgram(baseDoc)
             ?? throw new InvalidOperationException("BL output has no generated 'SeimensLogic' program POU.");
         RenameProgram(baseDoc, generated, names[0]);
+
+        var pous = baseDoc.SelectSingleNode("//*[local-name()='types']/*[local-name()='pous']")
+            ?? throw new InvalidOperationException("BL output has no project/types/pous container.");
 
         // Keep the generated programs contiguous: insert each new one right after the previous,
         // so they sit together (and before the template's TEMPLATES/P01_FB programs).
         XmlNode insertAfter = generated;
         for (var i = 1; i < xmls.Count; i++)
         {
-            var doc = new XmlDocument { PreserveWhitespace = true };
-            doc.LoadXml(Encoding.UTF8.GetString(StripBom(xmls[i])));
+            var doc = Load(xmls[i]);
             var gen = FindGeneratedProgram(doc)
-                ?? throw new InvalidOperationException("BL output has no generated 'SeimensLogic' program POU.");
+                ?? throw new InvalidOperationException($"BL output for program '{names[i]}' has no generated program POU.");
             RenameProgram(doc, gen, names[i]);
             var imported = baseDoc.ImportNode(gen, true);
             pous.InsertAfter(imported, insertAfter);
             insertAfter = imported;
         }
 
+        var dropped = DeduplicatePous(baseDoc);
+        if (dropped.Count > 0)
+            report.AppendLine($"template: removed {dropped.Count} repeated POU definition(s): {string.Join(", ", dropped.Distinct())}");
+        ValidateProject(baseDoc, names);
+        return Save(baseDoc);
+    }
+
+    /// <summary>
+    /// Removes repeated POU definitions that came in with the BL template (a TriStation export can
+    /// carry the same function block twice). Two definitions of one name make the editor merge or
+    /// duplicate the body, so the first one is kept. Returns the removed names.
+    /// </summary>
+    private static List<string> DeduplicatePous(XmlDocument doc)
+    {
+        var removed = new List<string>();
+        var pous = doc.SelectSingleNode("//*[local-name()='types']/*[local-name()='pous']");
+        if (pous is null) return removed;
+
+        var seen = new Dictionary<string, XmlElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (XmlNode node in pous.SelectNodes("./*[local-name()='pou']")!.Cast<XmlNode>().ToList())
+        {
+            if (node is not XmlElement el) continue;
+            string name = el.GetAttribute("name");
+            if (name.Length == 0) continue;
+            if (!seen.TryGetValue(name, out _))
+            {
+                seen[name] = el;
+                continue;
+            }
+            pous.RemoveChild(node);
+            removed.Add(name);
+        }
+        return removed;
+    }
+
+    private static XmlDocument Load(byte[] xml)
+    {
+        var doc = new XmlDocument { PreserveWhitespace = true };
+        doc.LoadXml(Encoding.UTF8.GetString(StripBom(xml)));
+        return doc;
+    }
+
+    private static byte[] Save(XmlDocument doc)
+    {
         using var ms = new MemoryStream();
-        baseDoc.Save(ms);
+        doc.Save(ms);
         return ms.ToArray();
+    }
+
+    /// <summary>Fails the run when BL produced anything other than exactly one non-empty program.</summary>
+    private static void RequireSingleGeneratedProgram(byte[] xml, string groupName)
+    {
+        var doc = Load(xml);
+        int found = 0;
+        foreach (XmlNode node in doc.SelectNodes("//*[local-name()='pou' and @pouType='program']")!)
+        {
+            if (node is XmlElement el &&
+                string.Equals(el.GetAttribute("name"), "SeimensLogic", StringComparison.Ordinal))
+            {
+                found++;
+                if (el.SelectSingleNode(".//*[local-name()='body']") == null)
+                    throw new InvalidOperationException($"BL produced an empty program for '{groupName}'.");
+            }
+        }
+        if (found != 1)
+            throw new InvalidOperationException(
+                $"BL produced {found} generated program POU(s) for '{groupName}' (expected exactly 1).");
+    }
+
+    /// <summary>Post-conditions for the merged project: every requested program is present exactly
+    /// once, and no POU name is duplicated.</summary>
+    private static void ValidateProject(XmlDocument doc, IReadOnlyList<string> expected)
+    {
+        var names = new List<string>();
+        foreach (XmlNode node in doc.SelectNodes("//*[local-name()='pous']/*[local-name()='pou']")!)
+            if (node is XmlElement el) names.Add(el.GetAttribute("name"));
+
+        var duplicates = names
+            .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToList();
+        if (duplicates.Count > 0)
+            throw new InvalidOperationException("Merged project has duplicate POU name(s): " + string.Join(", ", duplicates));
+
+        foreach (var name in expected)
+        {
+            if (!names.Contains(name, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Program '{name}' is missing from the merged project.");
+        }
     }
 
     // The generated program is the POU BL names "SeimensLogic"; the template's own programs are
@@ -340,16 +478,16 @@ public static class LadderPipeline
     }
 
     // The POU name lives in the element's attribute and in the body's <name> element. Other
-    // references (e.g. the resource's task->pou binding) also carry it; patch every exact
-    // "SeimensLogic" text/attribute under this POU so nothing points at the old name.
+    // references (e.g. the resource's task->pou binding) also carry it; patch every mention of the
+    // default name in the whole document so nothing keeps pointing at the old name.
     private static void RenameProgram(XmlDocument doc, XmlElement pou, string newName)
     {
         pou.SetAttribute("name", newName);
-        foreach (XmlNode node in pou.SelectNodes(".//*[@name='SeimensLogic']")!)
+        foreach (XmlNode node in doc.SelectNodes(".//*[@name='SeimensLogic']")!)
         {
             if (node is XmlElement el) el.SetAttribute("name", newName);
         }
-        foreach (XmlNode node in pou.SelectNodes(".//*[local-name()='name' and text()='SeimensLogic']")!)
+        foreach (XmlNode node in doc.SelectNodes(".//*[local-name()='name' and text()='SeimensLogic']")!)
         {
             node.InnerText = newName;
         }
@@ -358,6 +496,15 @@ public static class LadderPipeline
     private static byte[] StripBom(byte[] bytes)
         => bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF
             ? bytes[3..] : bytes;
+
+    private static int CountPrograms(byte[] xml)
+    {
+        try
+        {
+            return Load(xml).SelectNodes("//*[local-name()='pou' and @pouType='program']")!.Count;
+        }
+        catch { return -1; }
+    }
 
     private static string SanitizePouName(string name)
     {

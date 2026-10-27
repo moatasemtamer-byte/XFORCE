@@ -12,7 +12,7 @@ namespace Pt2Conv;
 /// displayables emitted in id order (reference file order is editor draw order),
 /// dateTime is generation time.
 /// </summary>
-public static class FbdGenerator
+public static partial class FbdGenerator
 {
     /// <summary>Authoritative per-tag info (from the template tag database) used for program global declarations.</summary>
     public readonly struct TagInfo
@@ -23,7 +23,7 @@ public static class FbdGenerator
 
     // ============================================================ library metadata (OBSERVED)
 
-    private sealed class LibPin
+    public sealed class LibPin
     {
         public string Name = "", DataType = "", InitVal = "";
         public int Vt, Flags;
@@ -37,6 +37,93 @@ public static class FbdGenerator
         public List<LibPin> Pins = new();
     }
 
+    /// <summary>Snapshot data for a POU defined by the project itself (a function block that
+    /// another POU instantiates). TriStation resolves such a block from the catalogue entry and
+    /// the FB's own interface, not from the platform library.</summary>
+    public sealed class ProjectTypeInfo
+    {
+        public int DogTag, ElemType = 2, SubType = 6, ExtOptFlags = 2, CemEI, CemAO, EventId, User = 2;
+        public string Date = "";
+        public List<LibPin> Pins = new();
+    }
+
+    /// <summary>Reads the interface of a project POU (inputs → vt0, outputs → vt1, inOut/local →
+    /// vt3) so it can be written as the snapshot of a block instance in another POU.</summary>
+    public static ProjectTypeInfo BuildProjectType(string xmlPath, string pouName)
+    {
+        var p = Parse(xmlPath, pouName, null, null);
+        var info = new ProjectTypeInfo();
+        foreach (var v in p.Vars)
+        {
+            int vt = v.Section switch
+            {
+                "output" => 1,
+                "inOut" => 3,
+                "local" => 3,
+                "input" => 0,
+                _ => 5,
+            };
+            info.Pins.Add(new LibPin
+            {
+                Name = v.Name,
+                DataType = v.IsInstance ? v.Derived : v.DataType,
+                InitVal = v.InitVal,
+                Vt = vt,
+                Flags = v.IsInstance ? 33554434 : 0,
+            });
+        }
+        return info;
+    }
+
+    /// <summary>
+    /// Loads the platform library identities observed in a TriStation 5.8 project
+    /// (dogTag/type/subType/flags/event/pin list per element). The built-in table above is
+    /// authoritative where it overlaps; this resource fills the remaining library types so
+    /// snapshots can be written without a template project that already carries them.
+    /// </summary>
+    private static bool _snapshotsLoaded;
+    public static void EnsureLibrarySnapshots()
+    {
+        if (_snapshotsLoaded) return;
+        _snapshotsLoaded = true;
+        try
+        {
+            using var stream = typeof(FbdGenerator).Assembly
+                .GetManifestResourceStream("Pt2Conv.Resources.library_snapshots.json");
+            if (stream == null) return;
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            using var doc = System.Text.Json.JsonDocument.Parse(reader.ReadToEnd());
+            foreach (var entry in doc.RootElement.EnumerateObject())
+            {
+                if (Lib.ContainsKey(entry.Name)) continue;
+                var v = entry.Value;
+                var meta = new LibMeta
+                {
+                    DogTag = v.GetProperty("dogTag").GetInt32(),
+                    Type = v.GetProperty("type").GetInt32(),
+                    SubType = v.GetProperty("subType").GetInt64(),
+                    ExtOptFlags = v.GetProperty("extOptFlags").GetInt32(),
+                    CemEI = v.GetProperty("cemEI").GetInt32(),
+                    CemAO = v.GetProperty("cemAO").GetInt32(),
+                    EventId = v.GetProperty("eventId").GetInt32(),
+                    Date = v.GetProperty("date").GetString() ?? "",
+                    User = v.GetProperty("user").GetInt32(),
+                };
+                foreach (var pin in v.GetProperty("pins").EnumerateArray())
+                    meta.Pins.Add(new LibPin
+                    {
+                        Name = pin.GetProperty("name").GetString() ?? "",
+                        DataType = pin.GetProperty("dataType").GetString() ?? "",
+                        InitVal = pin.GetProperty("initVal").GetString() ?? "",
+                        Vt = pin.GetProperty("vt").GetInt32(),
+                        Flags = pin.GetProperty("flags").GetInt32(),
+                    });
+                Lib[entry.Name] = meta;
+            }
+        }
+        catch { /* resource is optional; the built-in table still works */ }
+    }
+
     // Element names of every library function/function block/data type in the project
     // library. A program variable whose name matches one of these (case-insensitively)
     // is resolved by TriStation as a library reference, not as an unresolved tag, so it
@@ -45,6 +132,7 @@ public static class FbdGenerator
 
     public static void LoadLibraryNames(string projectXml)
     {
+        EnsureLibrarySnapshots();
         var doc = System.Xml.Linq.XDocument.Parse(projectXml);
         foreach (var e in doc.Descendants())
         {
@@ -462,12 +550,16 @@ public static class FbdGenerator
     private sealed class ExPinOut
     {
         public string Name = "";
+        public int RelY;
+        public bool Negated;
     }
 
     private sealed class ExPinIn
     {
         public string Name = "";
         public ExConn? Conn;
+        public int RelY;
+        public bool Negated;
     }
 
     private sealed class ExBlock : ExElem
@@ -515,6 +607,9 @@ public static class FbdGenerator
         public bool TargetIsBlockInput;
         public bool IsBranch;
         public bool Suppress;
+        // A zero-length connection from a real (non-literal) variable is silently dropped by
+        // the importer: the pin stays bare and the variable gets no outConnection.
+        public bool Drop;
         public Wire? Parent;
         public int Vn;
         public List<(int X, int Y)> PathExport = new();
@@ -526,6 +621,9 @@ public static class FbdGenerator
         public string EndAPin = "";
         public ExElem? EndB;
         public string EndBPin = "";
+        // The connection's path as exported (target -> source). Net decomposition runs on
+        // this raw geometry after the ST layout has been computed from the logical wires.
+        public List<(int X, int Y)> RawPath = new();
     }
 
     private sealed class BlockPlan
@@ -647,6 +745,7 @@ public static class FbdGenerator
                         X = int.Parse(A(d, "X", "0")),
                         Y = int.Parse(A(d, "Y", "0")),
                         Type = A(d, "Type", "HORIZONTAL"),
+                        ExportId = int.Parse(A(d, "localId", A(d, "LocalId", "-1"))),
                     };
                     dv.Clipped = IsClipped(dv.Y, 0);
                     p.Dividers.Add(dv);
@@ -695,7 +794,9 @@ public static class FbdGenerator
                     c.Behind = TextTrim(cx.Elements().FirstOrDefault(e => e.Name.LocalName == "BEHINDLOGIC"));
                 }
                 c.Text = el.Elements().FirstOrDefault(e => e.Name.LocalName == "content")?.Value ?? "";
-                c.Clipped = IsClipped(c.Y, c.H);
+                // Frame comments legitimately extend past the drawing frame (the reference
+                // keeps them), so only logic items are clipped.
+                c.Clipped = false;
                 p.Comments.Add(c);
                 p.ElemOrder.Add(c);
                 c.ExportId = int.Parse(A(el, "localId", "-1"));
@@ -727,6 +828,14 @@ public static class FbdGenerator
                 var annMon = itemExt?.Elements().FirstOrDefault(e => e.Name.LocalName == "ANNOTATEMONITORVALUE");
                 if (annMon != null) v.MonitorValue = TextTrim(annMon);
                 v.IsConstant = IsConstantName(v.Expression);
+                // TriStation drops drawn placeholders that are not valid identifiers (empty,
+                // "10", "dir/…", "L%4102", "max"/"min"); a literal is only valid on an input
+                // (inVariable) where it is a constant. Which placements survive is visible in
+                // the imported FBD: invalid names appear nowhere, not even as declarations.
+                bool keepPlacement = v.Kind == "in"
+                    ? v.IsConstant || IsDeclarableName(v.Expression)
+                    : IsDeclarableName(v.Expression);
+                if (!keepPlacement) continue;
                 if (v.InConn != null) { v.InConn.Owner = v; p.ConnOrder.Add(v.InConn); }
                 p.Placements.Add(v);
                 p.ElemOrder.Add(v);
@@ -751,6 +860,9 @@ public static class FbdGenerator
                     foreach (var pinEl in iv.Elements().Where(e => e.Name.LocalName == "variable"))
                     {
                         var pin = new ExPinIn { Name = A(pinEl, "formalParameter") };
+                        pin.Negated = A(pinEl, "negated", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
+                        var rel = pinEl.Descendants().FirstOrDefault(e => e.Name.LocalName == "relPosition");
+                        if (rel != null) int.TryParse(A(rel, "y", "0"), out pin.RelY);
                         var cpi = pinEl.Elements().FirstOrDefault(e => e.Name.LocalName == "connectionPointIn");
                         pin.Conn = ParseConn(cpi?.Elements().FirstOrDefault(e => e.Name.LocalName == "connection"));
                         if (pin.Conn != null) { pin.Conn.Owner = b; pin.Conn.OwnerPin = pin.Name; p.ConnOrder.Add(pin.Conn); }
@@ -759,7 +871,13 @@ public static class FbdGenerator
                 var ov = el.Elements().FirstOrDefault(e => e.Name.LocalName == "outputVariables");
                 if (ov != null)
                     foreach (var pinEl in ov.Elements().Where(e => e.Name.LocalName == "variable"))
-                        b.Outputs.Add(new ExPinOut { Name = A(pinEl, "formalParameter") });
+                    {
+                        var po = new ExPinOut { Name = A(pinEl, "formalParameter") };
+                        po.Negated = A(pinEl, "negated", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
+                        var relPos = pinEl.Descendants().FirstOrDefault(e => e.Name.LocalName == "relPosition");
+                        if (relPos != null) int.TryParse(A(relPos, "y", "0"), out po.RelY);
+                        b.Outputs.Add(po);
+                    }
                 b.Clipped = IsClipped(b.Y, b.H);
                 var dsEl = el.Elements().FirstOrDefault(e => e.Name.LocalName == "DOUBLE_SPACE_TERMINAL");
                 if (dsEl != null) b.DoubleSpace = TextTrim(dsEl).Equals("true", StringComparison.OrdinalIgnoreCase);
@@ -790,7 +908,7 @@ public static class FbdGenerator
     // A name is written to the FBD declarations only when it is a plain identifier, is not
     // a literal, and does not shadow a library element. Anything else (empty, "dir/…",
     // "L%4102", "max"/"min") is a drawn placeholder that TriStation never declares.
-    private static bool IsDeclarableName(string name)
+    public static bool IsDeclarableName(string name)
     {
         if (string.IsNullOrEmpty(name) || IsConstantName(name)) return false;
         if (name.IndexOfAny(new[] { '/', '%', ' ' }) >= 0) return false;
@@ -835,6 +953,7 @@ public static class FbdGenerator
         public int TempCount;
         public int LastId;
         public int PrimarySpan;
+        public int WireIdStart;
     }
 
     private static int TargetPriority(ExPou p, Wire w)
@@ -866,149 +985,314 @@ public static class FbdGenerator
     // TriStation stores one authoring net as arms split at junctions: through each junction
     // the two collinear arms are merged into one wire and every other arm is emitted as its
     // own wire. The export lists one connection per sink, so a merge net shows up as several
-    // connections sharing geometry. This rebuilds the editor's decomposition.
+    // connections sharing geometry. This rebuilds the editor's decomposition:
+    //   * arms that continue straight through a junction merge into one chain (the trunk);
+    //   * an arm that stops at a junction becomes a branch whose output points at the trunk
+    //     with effectiveParam "Vn" (n = index of the junction point in the trunk's path);
+    //   * a chain may start/end on any element pin (including an input pin), not only on the
+    //     element that the original connection named.
+    // The decomposition runs on the raw exported geometry after ComputeLayout so the ST
+    // layout keeps using the original logical wires.
+    private sealed class NetChain
+    {
+        public List<(int X, int Y)> Pts = new();
+        public Wire Wire = null!;
+        public (int X, int Y) StartJunction, EndJunction;
+        public bool StartIsJunction, EndIsJunction;
+        public Wire? Parent;
+        public int Vn;
+    }
+
     private static void DecomposeNets(Plan plan)
     {
-        var live = plan.Wires.Where(w => !w.Suppress).ToList();
+        var live = plan.Wires.Where(w => !w.Suppress && w.RawPath.Count >= 2).ToList();
         if (live.Count < 2) return;
 
-        int n = live.Count;
-        var par = Enumerable.Range(0, n).ToArray();
-        int Find(int a) { while (par[a] != a) { par[a] = par[par[a]]; a = par[a]; } return a; }
-        void Union(int a, int b) { int ra = Find(a), rb = Find(b); if (ra != rb) par[rb] = ra; }
-
-        for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-                if (ShareGeometry(live[i].PathExport, live[j].PathExport)) Union(i, j);
-
-        var nets = new Dictionary<int, List<Wire>>();
-        for (int i = 0; i < n; i++)
-        {
-            int r = Find(i);
-            if (!nets.TryGetValue(r, out var lst)) { lst = new List<Wire>(); nets[r] = lst; }
-            lst.Add(live[i]);
-        }
-
+        // A merge net is a fan-out from one source pin: the export repeats the shared route
+        // for every sink. Grouping by source pin (not by arbitrary geometric touching) is what
+        // keeps two unrelated wires that merely cross/touch from being merged.
+        var groups = live.GroupBy(w => (Source: w.Source, Pin: w.SourcePin)).ToList();
+        var chainsByFirst = new Dictionary<Wire, List<Wire>>();
         var replaced = new HashSet<Wire>();
-        var added = new List<Wire>();
-        foreach (var net in nets.Values)
+        foreach (var g in groups)
         {
+            var net = g.ToList();
             if (net.Count < 2) continue;
-
-            var allPts = new HashSet<(int X, int Y)>();
-            foreach (var w in net) foreach (var p in w.PathExport) allPts.Add(p);
-            var pts = allPts.ToList();
-
-            var adj = new Dictionary<(int X, int Y), HashSet<(int X, int Y)>>();
-            void AddEdge((int X, int Y) a, (int X, int Y) b)
-            {
-                if (a == b) return;
-                if (!adj.TryGetValue(a, out var la)) { la = new HashSet<(int X, int Y)>(); adj[a] = la; }
-                if (!adj.TryGetValue(b, out var lb)) { lb = new HashSet<(int X, int Y)>(); adj[b] = lb; }
-                la.Add(b); lb.Add(a);
-            }
-            foreach (var w in net)
-                for (int k = 0; k + 1 < w.PathExport.Count; k++)
-                {
-                    var a = w.PathExport[k]; var b = w.PathExport[k + 1];
-                    var between = pts.Where(s => s != a && s != b && OnSegment(s, a, b))
-                        .OrderBy(s => Math.Abs(s.X - a.X) + Math.Abs(s.Y - a.Y)).ToList();
-                    var chain = new List<(int X, int Y)> { a };
-                    chain.AddRange(between); chain.Add(b);
-                    for (int t = 0; t + 1 < chain.Count; t++) AddEdge(chain[t], chain[t + 1]);
-                }
-
-            int Deg((int X, int Y) p) => adj.TryGetValue(p, out var s) ? s.Count : 0;
-            var junctions = adj.Keys.Where(p => Deg(p) >= 3).ToHashSet();
-            if (junctions.Count == 0) continue;
-            // Only rebuild simple taps (one junction, three arms). Larger fan-out nets keep the
-            // export's per-connection wires, which is what the editor stores for them.
-            if (junctions.Count != 1) continue;
-
-            var usedEdge = new HashSet<string>();
-            var arms = new List<List<(int X, int Y)>>();
-            void WalkFrom((int X, int Y) start, (int X, int Y) first)
-            {
-                var arm = new List<(int X, int Y)> { start, first };
-                var prev = start; var cur = first;
-                while (!junctions.Contains(cur) && Deg(cur) == 2)
-                {
-                    var nxt = adj[cur].First(x => x != prev);
-                    arm.Add(nxt); prev = cur; cur = nxt;
-                }
-                for (int t = 0; t + 1 < arm.Count; t++) usedEdge.Add(EdgeKey(arm[t], arm[t + 1]));
-                arms.Add(arm);
-            }
-            foreach (var j in junctions)
-                foreach (var nb in adj[j])
-                    if (!usedEdge.Contains(EdgeKey(j, nb))) WalkFrom(j, nb);
-
-            var used = new bool[arms.Count];
+            var chains = TryDecomposeNet(plan, net);
+            if (chains == null || chains.Count != net.Count) continue;
+            var wires = chains.Select(c => c.Wire).ToList();
+            chainsByFirst[net[0]] = wires;
             foreach (var w in net) replaced.Add(w);
-
-            if (Environment.GetEnvironmentVariable("PT2_NETDBG") == "1")
-            {
-                Console.Error.WriteLine($"[net] junctions={junctions.Count} arms={arms.Count} juncts={string.Join(" ", junctions.Select(p => $"{p.X},{p.Y}"))}");
-                for (int a = 0; a < arms.Count; a++)
-                    Console.Error.WriteLine($"   arm{a}: {string.Join(" ; ", arms[a].Select(p => $"{p.X},{p.Y}"))}");
-            }
-
-            for (int i = 0; i < arms.Count; i++)
-            {
-                if (used[i]) continue;
-                used[i] = true;
-                var cur = arms[i];
-                for (int pass = 0; pass < 2; pass++)
-                {
-                    int end = pass == 0 ? cur.Count - 1 : 0;
-                    var jpt = cur[end];
-                    if (!junctions.Contains(jpt)) continue;
-                    var inDir = end == cur.Count - 1
-                        ? Dir(cur[end], cur[end - 1]) : Dir(cur[0], cur[1]);
-                    for (int k = 0; k < arms.Count; k++)
-                    {
-                        if (used[k]) continue;
-                        int other = arms[k][0] == jpt ? 0 : arms[k][^1] == jpt ? arms[k].Count - 1 : -1;
-                        if (other < 0) continue;
-                        var outDir = other == 0
-                            ? Dir(arms[k][0], arms[k][1]) : Dir(arms[k][^1], arms[k][^2]);
-                        bool parallel = inDir.X * outDir.Y == inDir.Y * outDir.X;
-                        bool opposite = inDir.X * outDir.X + inDir.Y * outDir.Y < 0;
-                        if (parallel && opposite)
-                        {
-                            used[k] = true;
-                            // orient arm i so it starts at the junction, arm k so it ends there
-                            var iOriented = end == cur.Count - 1
-                                ? Enumerable.Reverse(cur).ToList() : new List<(int X, int Y)>(cur);
-                            var kOriented = other == 0
-                                ? Enumerable.Reverse(arms[k]).ToList() : new List<(int X, int Y)>(arms[k]);
-                            var merged = new List<(int X, int Y)>(kOriented);
-                            for (int q = 1; q < iOriented.Count; q++) merged.Add(iOriented[q]);
-                            cur = merged;
-                            break;
-                        }
-                    }
-                }
-                added.Add(MakeDecomposedWire(net[0], cur));
-                if (Environment.GetEnvironmentVariable("PT2_NETDBG") == "1")
-                    Console.Error.WriteLine($"   ->wire: {string.Join(" ; ", cur.Select(p => $"{p.X},{p.Y}"))}");
-            }
         }
+        if (chainsByFirst.Count == 0) return;
 
-        if (replaced.Count == 0) return;
-        var final = plan.Wires.Where(w => !replaced.Contains(w)).ToList();
-        final.AddRange(added);
+        var final = new List<Wire>();
+        foreach (var w in plan.Wires)
+        {
+            if (chainsByFirst.TryGetValue(w, out var repl)) final.AddRange(repl);
+            else if (!replaced.Contains(w)) final.Add(w);
+        }
         plan.Wires = final;
     }
 
-    private static bool ShareGeometry(List<(int X, int Y)> A, List<(int X, int Y)> B)
+    /// <summary>
+    /// Decomposes one geometric net into chains. Returns null when the result cannot be
+    /// mapped back one-to-one to the net's connections (then the caller keeps the export's
+    /// per-connection wires).
+    /// </summary>
+    private static List<NetChain>? TryDecomposeNet(Plan plan, List<Wire> net)
     {
-        foreach (var p in A) if (B.Contains(p)) return true;
-        for (int k = 0; k + 1 < B.Count; k++)
-            foreach (var p in A) if (OnSegment(p, B[k], B[k + 1])) return true;
-        for (int k = 0; k + 1 < A.Count; k++)
-            foreach (var p in B) if (OnSegment(p, A[k], A[k + 1])) return true;
-        return false;
+        // ---- planar graph of the net's raw geometry ----
+        var pts = new HashSet<(int X, int Y)>();
+        foreach (var w in net) foreach (var p in w.RawPath) pts.Add(p);
+        var all = pts.ToList();
+
+        var adj = new Dictionary<(int X, int Y), HashSet<(int X, int Y)>>();
+        void AddEdge((int X, int Y) a, (int X, int Y) b)
+        {
+            if (a == b) return;
+            if (!adj.TryGetValue(a, out var la)) { la = new HashSet<(int X, int Y)>(); adj[a] = la; }
+            if (!adj.TryGetValue(b, out var lb)) { lb = new HashSet<(int X, int Y)>(); adj[b] = lb; }
+            la.Add(b); lb.Add(a);
+        }
+        foreach (var w in net)
+            for (int k = 0; k + 1 < w.RawPath.Count; k++)
+            {
+                var a = w.RawPath[k]; var b = w.RawPath[k + 1];
+                var between = all.Where(s => s != a && s != b && OnSegment(s, a, b))
+                    .OrderBy(s => Math.Abs(s.X - a.X) + Math.Abs(s.Y - a.Y)).ToList();
+                var chain = new List<(int X, int Y)> { a };
+                chain.AddRange(between); chain.Add(b);
+                for (int t = 0; t + 1 < chain.Count; t++) AddEdge(chain[t], chain[t + 1]);
+            }
+
+        int Deg((int X, int Y) p) => adj.TryGetValue(p, out var s) ? s.Count : 0;
+        var junctions = adj.Keys.Where(p => Deg(p) >= 3).ToHashSet();
+        if (junctions.Count == 0) return null;
+
+        // ---- pins at the exported path ends (raw paths run target -> source) ----
+        var pinAt = new Dictionary<(int X, int Y), List<(ExElem Elem, string Pin, bool IsSource)>>();
+        void AddPin((int X, int Y) p, ExElem e, string pin, bool isSource)
+        {
+            if (!pinAt.TryGetValue(p, out var l)) { l = new List<(ExElem, string, bool)>(); pinAt[p] = l; }
+            if (!l.Any(x => ReferenceEquals(x.Elem, e) && x.Pin == pin && x.IsSource == isSource))
+                l.Add((e, pin, isSource));
+        }
+        foreach (var w in net)
+        {
+            AddPin(w.RawPath[0], w.Target, w.TargetPin, false);
+            AddPin(w.RawPath[^1], w.Source, w.SourcePin, true);
+        }
+
+        // ---- arms between special nodes (junctions / path ends) ----
+        var arms = new List<List<(int X, int Y)>>();
+        var armEnds = new List<((int X, int Y) Pt, bool AtStart)>();
+        var usedEdge = new HashSet<string>();
+        void WalkFrom((int X, int Y) start, (int X, int Y) first)
+        {
+            var arm = new List<(int X, int Y)> { start, first };
+            var prev = start; var cur = first;
+            while (Deg(cur) == 2)
+            {
+                var nxt = adj[cur].First(x => x != prev);
+                arm.Add(nxt); prev = cur; cur = nxt;
+            }
+            for (int t = 0; t + 1 < arm.Count; t++) usedEdge.Add(EdgeKey(arm[t], arm[t + 1]));
+            arms.Add(arm);
+        }
+        foreach (var p in adj.Keys.Where(p => Deg(p) != 2))
+            foreach (var nb in adj[p])
+                if (!usedEdge.Contains(EdgeKey(p, nb))) WalkFrom(p, nb);
+        if (arms.Count == 0) return null;
+
+        // ---- merge collinear opposite arm ends at each junction ----
+        var pair = new Dictionary<(int Arm, int End), (int Arm, int End)>();
+        foreach (var j in junctions)
+        {
+            var ends = new List<(int Arm, int End, (int X, int Y) Dir)>();
+            for (int a = 0; a < arms.Count; a++)
+                for (int e = 0; e < 2; e++)
+                {
+                    var endPt = e == 0 ? arms[a][0] : arms[a][^1];
+                    if (endPt != j) continue;
+                    var nb = e == 0 ? arms[a][1] : arms[a][^2];
+                    ends.Add((a, e, Dir(j, nb)));
+                }
+            var used = new bool[ends.Count];
+            for (int i = 0; i < ends.Count; i++)
+            {
+                if (used[i]) continue;
+                for (int k = i + 1; k < ends.Count; k++)
+                {
+                    if (used[k]) continue;
+                    if (ends[i].Dir.X * ends[k].Dir.Y != ends[i].Dir.Y * ends[k].Dir.X) continue;
+                    if (ends[i].Dir.X * ends[k].Dir.X + ends[i].Dir.Y * ends[k].Dir.Y >= 0) continue;
+                    used[i] = used[k] = true;
+                    pair[(ends[i].Arm, ends[i].End)] = (ends[k].Arm, ends[k].End);
+                    pair[(ends[k].Arm, ends[k].End)] = (ends[i].Arm, ends[i].End);
+                    break;
+                }
+            }
+        }
+
+        // ---- chains: walk arms linked by merge pairs ----
+        var chains = new List<NetChain>();
+        var armUsed = new bool[arms.Count];
+        for (int a0 = 0; a0 < arms.Count; a0++)
+        {
+            for (int e0 = 0; e0 < 2; e0++)
+            {
+                if (armUsed[a0] || pair.ContainsKey((a0, e0))) continue;
+                int curA = a0, startEnd = e0, end = 1 - e0;
+                var ptsChain = new List<(int X, int Y)>(arms[curA]);
+                if (startEnd == 1) ptsChain.Reverse();
+                armUsed[curA] = true;
+                var startPt = ptsChain[0];
+                var lastPt = ptsChain[^1];
+                int guard = 0;
+                while (pair.TryGetValue((curA, end), out var nx) && guard++ < arms.Count * 2)
+                {
+                    int nb = nx.Arm;
+                    if (armUsed[nb]) break;
+                    var arm = arms[nb];
+                    var oriented = nx.End == 0 ? new List<(int X, int Y)>(arm) : Enumerable.Reverse(arm).ToList();
+                    for (int t = 1; t < oriented.Count; t++) ptsChain.Add(oriented[t]);
+                    armUsed[nb] = true;
+                    curA = nb; end = 1 - nx.End;
+                    lastPt = ptsChain[^1];
+                }
+                var chain = new NetChain { Pts = ptsChain };
+                chains.Add(chain);
+            }
+        }
+        foreach (var a in arms.Select((v, i) => (v, i)))
+            if (!armUsed[a.i]) return null;
+        if (chains.Count == 0) return null;
+
+        // ---- endpoints -> pins / junctions, then build the wire for each chain ----
+        string? EndPin(List<(ExElem Elem, string Pin, bool IsSource)>? l)
+            => l == null || l.Count == 0 ? null : l[0].Pin;
+
+        foreach (var c in chains)
+        {
+            var p0 = c.Pts[0];
+            var p1 = c.Pts[^1];
+            bool pin0 = pinAt.ContainsKey(p0) && !junctions.Contains(p0);
+            bool pin1 = pinAt.ContainsKey(p1) && !junctions.Contains(p1);
+            bool j0 = junctions.Contains(p0);
+            bool j1 = junctions.Contains(p1);
+
+            if (pin0 && pin1)
+            {
+                var a = pinAt[p0][0];
+                var b = pinAt[p1][0];
+                // Start at the connection's source pin when exactly one end is a source;
+                // otherwise use the larger (Y, X) end - the editor's usual trunk direction.
+                bool reverse;
+                if (a.IsSource && !b.IsSource) reverse = false;
+                else if (!a.IsSource && b.IsSource) reverse = true;
+                else reverse = p1.Y > p0.Y || (p1.Y == p0.Y && p1.X > p0.X);
+                if (reverse) { c.Pts.Reverse(); (a, b) = (b, a); }
+                c.Wire = new Wire
+                {
+                    Source = a.Elem, SourcePin = a.Pin,
+                    Target = b.Elem, TargetPin = b.Pin,
+                    PathExport = c.Pts, Decomposed = true,
+                };
+            }
+            else if (pin0 && j1)
+            {
+                var a = pinAt[p0][0];
+                c.StartIsJunction = false; c.EndIsJunction = true; c.EndJunction = p1;
+                c.Wire = new Wire
+                {
+                    Source = a.Elem, SourcePin = a.Pin,
+                    Target = a.Elem, TargetPin = a.Pin, // branches are oriented pin -> Vn
+                    PathExport = c.Pts, Decomposed = true, IsBranch = true,
+                };
+            }
+            else if (j0 && pin1)
+            {
+                var b = pinAt[p1][0];
+                c.Pts.Reverse();
+                c.StartIsJunction = true; c.EndIsJunction = false; c.StartJunction = p0;
+                c.Wire = new Wire
+                {
+                    Source = b.Elem, SourcePin = b.Pin,
+                    Target = b.Elem, TargetPin = b.Pin,
+                    PathExport = c.Pts, Decomposed = true, IsBranch = true,
+                };
+            }
+            else return null; // junction->junction chain: not a shape the editor emits
+        }
+
+        // ---- parent trunk + Vn for branches ----
+        foreach (var c in chains.Where(x => x.Wire.IsBranch))
+        {
+            var j = c.StartIsJunction ? c.StartJunction : c.EndJunction;
+            NetChain? parent = null; int idx = -1;
+            foreach (var p in chains)
+            {
+                if (ReferenceEquals(p, c)) continue;
+                int at = p.Pts.FindIndex(q => q == j);
+                if (at > 0 && at < p.Pts.Count - 1) { parent = p; idx = at; break; }
+            }
+            if (parent == null) return null;
+            c.Wire.Parent = parent.Wire;
+            c.Wire.Vn = idx;
+            c.Wire.IsBranch = true;
+        }
+
+        // ---- remap the logical pin references (used by block/var emission) ----
+        foreach (var c in chains)
+        {
+            foreach (var (pt, isStart) in new[] { (c.Pts[0], true), (c.Pts[^1], false) })
+            {
+                if (!pinAt.TryGetValue(pt, out var list) || junctions.Contains(pt)) continue;
+                foreach (var (elem, pin, isSource) in list)
+                {
+                    if (elem is ExVarPlace vp)
+                    {
+                        if (!plan.Places.TryGetValue(vp, out var pp)) continue;
+                        if (isSource) pp.OutWire = c.Wire; else pp.InWire = c.Wire;
+                    }
+                    else if (elem is ExBlock b)
+                    {
+                        var bp = plan.Blocks.FirstOrDefault(x => x.B == b);
+                        if (bp == null) continue;
+                        if (isSource) bp.OutWires[pin] = c.Wire;
+                        else
+                        {
+                            int ix = b.Inputs.FindIndex(x => x.Name == pin);
+                            if (ix >= 0 && ix < bp.InWires.Count) bp.InWires[ix] = c.Wire;
+                        }
+                    }
+                }
+            }
+        }
+
+        return chains;
+    }
+
+    /// <summary>
+    /// Assigns wire ids after the final geometry is known: per sheet, in plan order, a wire
+    /// consumes one id per path segment and keeps the last one (TriStation's edit-history
+    /// gaps). Recomputes PrimarySpan/lastUniqueID from the last id.
+    /// </summary>
+    private static void AssignWireIds(Plan plan)
+    {
+        int next = plan.WireIdStart;
+        foreach (var sheet in plan.P.Sheets.OrderBy(s => s.Number))
+        {
+            foreach (var w in plan.Wires.Where(w => !w.Suppress && w.Target != null && w.Target.Sheet == sheet.Number))
+            {
+                int segs = Math.Max(1, w.PathExport.Count - 1);
+                next += segs - 1;
+                w.Id = next++;
+            }
+        }
+        plan.PrimarySpan = next - 1;
+        plan.LastId = plan.P.PouType == "program" ? plan.PrimarySpan : 2 * plan.PrimarySpan;
     }
 
     private static string EdgeKey((int X, int Y) a, (int X, int Y) b)
@@ -1016,26 +1300,6 @@ public static class FbdGenerator
             ? $"{a.X},{a.Y}|{b.X},{b.Y}" : $"{b.X},{b.Y}|{a.X},{a.Y}";
 
     private static (int X, int Y) Dir((int X, int Y) a, (int X, int Y) b) => (b.X - a.X, b.Y - a.Y);
-
-    private static Wire MakeDecomposedWire(Wire template, List<(int X, int Y)> path)
-    {
-        var rev = new List<(int X, int Y)>(path);
-        rev.Reverse();
-        return new Wire
-        {
-            Source = template.Source,
-            Target = template.Target,
-            SourcePin = template.SourcePin,
-            TargetPin = template.TargetPin,
-            SourceVar = template.SourceVar,
-            SourceBlock = template.SourceBlock,
-            TargetVar = template.TargetVar,
-            TargetBlock = template.TargetBlock,
-            TargetIsBlockInput = template.TargetIsBlockInput,
-            PathExport = rev,
-            Decomposed = true,
-        };
-    }
 
     private static Plan BuildPlan(ExPou p)
     {
@@ -1089,6 +1353,7 @@ public static class FbdGenerator
             var tgt = c.Owner!;
             if (src.Clipped || tgt.Clipped) continue;
             var w = new Wire { Source = src, Target = tgt, PathExport = new List<(int, int)>(c.Path) };
+            w.RawPath = new List<(int X, int Y)>(c.Path);
             if (src is ExVarPlace sv) { w.SourceVar = sv; w.SourcePin = sv.Expression; }
             else if (src is ExBlock sb)
             {
@@ -1099,10 +1364,14 @@ public static class FbdGenerator
             if (tgt is ExVarPlace tv) { w.TargetVar = tv; w.TargetPin = tv.Expression; }
             else if (tgt is ExBlock tb) { w.TargetBlock = tb; w.TargetPin = c.OwnerPin; w.TargetIsBlockInput = true; }
             bool degenerate = c.Path.Count >= 1 && c.Path.All(pp => pp == c.Path[0]);
-            bool srcDrop = w.SourceVar != null && w.SourceVar.IsConstant
-                && (w.SourceVar.Kind != "in" || degenerate || IsBoolConstant(w.SourceVar));
+            // A literal placement is never joined to the logic with a wire object: the
+            // editor stores it as a direct pin connection (the variable carries
+            // outConnectId and the target pin carries connectId). Only real variables get
+            // wire objects. A zero-length connection is stored the same way.
+            bool srcDrop = (w.SourceVar != null && w.SourceVar.IsConstant) || degenerate;
             bool tgtDrop = w.TargetVar != null && w.TargetVar.IsConstant && w.TargetVar.Kind != "in";
             if (srcDrop || tgtDrop) w.Suppress = true;
+            if (degenerate && (w.SourceVar == null || !w.SourceVar.IsConstant)) w.Drop = true;
             plan.Wires.Add(w);
             connWire[c] = w;
         }
@@ -1113,7 +1382,15 @@ public static class FbdGenerator
         // reliable. Keep the export's per-connection wires until the rule is exact.
         // DecomposeNets(plan);
 
-        // 2. group by source -> choose main wire, mark branches, compute junctions
+        // A zero-length outgoing connection from a variable that is itself a sink is dropped
+        // by the importer; one from a pure source is kept as a direct pin link.
+        var inboundVars = new HashSet<ExVarPlace>(plan.Wires
+            .Where(w => !w.Suppress && w.TargetVar != null).Select(w => w.TargetVar!));
+        foreach (var w in plan.Wires)
+            if (w.Drop && w.SourceVar != null && !inboundVars.Contains(w.SourceVar)) w.Drop = false;
+
+        // 2. group by source -> choose main wire, mark branches (fallback for nets that the
+        //    geometric decomposer does not rebuild; it runs after the ST layout).
         foreach (var g in plan.Wires.Where(w => !w.Suppress && !w.Decomposed).GroupBy(w => (w.Source, w.SourcePin)))
         {
             var list = g.ToList();
@@ -1125,7 +1402,6 @@ public static class FbdGenerator
                 b.IsBranch = true;
                 b.Parent = main;
 
-                // common suffix of branch path and main path (both target -> source)
                 var pathB = b.PathExport;
                 var pathM = main.PathExport;
                 int k = 0;
@@ -1148,7 +1424,6 @@ public static class FbdGenerator
             var rev = Enumerable.Reverse(main.PathExport).ToList();
             var junctions = branches.Select(b => (Point: b.PathExport[^1], Branch: b)).ToList();
 
-            // order junctions by (segment index, distance from segment start)
             var ordered = new List<((int X, int Y) Point, Wire Branch, int Seg, long Dist)>();
             foreach (var j in junctions)
             {
@@ -1178,37 +1453,36 @@ public static class FbdGenerator
             main.PathExport = final;
         }
 
-        // 4. element ids: the export already carries authoritative localIds (the XML
-        //    localId attribute). TriStation preserves them verbatim, so we reuse them
-        //    instead of renumbering. The "primary span" is the maximum element localId;
-        //    the duplicated (second) copy of the diagram is offset by this span, and the
-        //    generated wires continue after it.
+        // 4. element ids: TriStation renumbers every import from 1, sheet by sheet, and
+        //    within a sheet in a fixed kind order: network dividers, blocks/functions,
+        //    comments, variable placements, then the wires authored on that sheet. Wires
+        //    consume one id per segment (path points - 1) and keep the last one, which is
+        //    why the reference's wire ids show gaps where a multi-bend wire was drawn.
+        //    Reusing the export's localId is only correct for documents whose ids already
+        //    follow that order (the library blocks); renumbering matches both cases.
         _commentIds.Clear();
-        int maxElemId = 0;
-        foreach (var e in p.ElemOrder)
-            if (e.ExportId > maxElemId) maxElemId = e.ExportId;
-        plan.PrimarySpan = maxElemId;
-
-        foreach (var dv in p.Dividers.Where(d => !d.Clipped).OrderBy(d => d.DocIndex))
-            plan.DividerIds[dv] = dv.ExportId >= 0 ? dv.ExportId : ++maxElemId;
-
-        foreach (var b in p.Blocks.Where(b => !b.Clipped))
-            plan.Blocks.Add(new BlockPlan { B = b, Id = b.ExportId >= 0 ? b.ExportId : ++maxElemId });
-
-        foreach (var e in p.ElemOrder.Where(e => !e.Clipped))
+        int nextId = 1;
+        foreach (var sheet in p.Sheets.OrderBy(s => s.Number))
         {
-            if (e is ExVarPlace vp) plan.Places[vp] = new PlacePlan { P = vp, Id = vp.ExportId >= 0 ? vp.ExportId : ++maxElemId };
-            else if (e is ExComment cm) _commentIds[cm] = cm.ExportId >= 0 ? cm.ExportId : ++maxElemId;
-        }
+            int sheetNo = sheet.Number;
+            foreach (var dv in p.Dividers.Where(d => !d.Clipped && d.Sheet == sheetNo).OrderBy(d => d.DocIndex))
+                plan.DividerIds[dv] = nextId++;
 
-        // wire ids continue after the elements (reference keeps edit-history gaps in the wire
-        // range that cannot be reproduced generically; contiguous ids are an accepted
-        // deviation). The primary span is the largest id used by the first (primary) copy;
-        // the second copy is offset by exactly this span and lastUniqueID is twice it.
-        int wireId = maxElemId + 1;
-        foreach (var w in plan.Wires.Where(w => !w.Suppress)) w.Id = wireId++;
-        plan.PrimarySpan = wireId - 1;
-        // Programs are stored once, so their id space is not doubled.
+            foreach (var b in p.Blocks.Where(b => !b.Clipped && b.Sheet == sheetNo).OrderBy(b => b.DocIndex))
+                plan.Blocks.Add(new BlockPlan { B = b, Id = nextId++ });
+
+            foreach (var c in p.ElemOrder.OfType<ExComment>()
+                         .Where(c => !c.Clipped && c.Sheet == sheetNo).OrderBy(c => c.DocIndex))
+                _commentIds[c] = nextId++;
+
+            foreach (var v in p.ElemOrder.OfType<ExVarPlace>()
+                         .Where(v => !v.Clipped && v.Sheet == sheetNo).OrderBy(v => v.DocIndex))
+                plan.Places[v] = new PlacePlan { P = v, Id = nextId++ };
+        }
+        // Wire ids depend on the final (decomposed) geometry, so they are assigned after
+        // ComputeLayout + DecomposeNets by AssignWireIds.
+        plan.WireIdStart = nextId;
+        plan.PrimarySpan = nextId - 1;
         plan.LastId = p.PouType == "program" ? plan.PrimarySpan : 2 * plan.PrimarySpan;
         return plan;
     }
@@ -1372,6 +1646,7 @@ public static class FbdGenerator
         // attach wires to placements
         foreach (var w in plan.Wires)
         {
+            if (w.Drop) continue;
             if (!w.IsBranch && w.SourceVar != null && plan.Places.TryGetValue(w.SourceVar, out var ps))
                 ps.OutWire = w;
             if (w.TargetVar != null && plan.Places.TryGetValue(w.TargetVar, out var pt))
@@ -1469,19 +1744,27 @@ public static class FbdGenerator
 
     private static int Tx(int v) => 10 * v + 40;
 
-    public static byte[] GenerateBytes(string xmlPath, string pouName, IReadOnlyDictionary<string, TagInfo>? tagDesc = null, IReadOnlySet<string>? referencedTypes = null, int templateSheetCount = -1, bool forceDuplicated = false)
-        => Encoding.UTF8.GetBytes(Generate(xmlPath, pouName, tagDesc, referencedTypes, templateSheetCount, forceDuplicated));
+    public static byte[] GenerateBytes(string xmlPath, string pouName, IReadOnlyDictionary<string, TagInfo>? tagDesc = null, IReadOnlySet<string>? referencedTypes = null, int templateSheetCount = -1, bool forceDuplicated = false, IReadOnlyDictionary<string, ProjectTypeInfo>? projectTypes = null)
+    {
+        EnsureLibrarySnapshots();
+        return Encoding.UTF8.GetBytes(Generate(xmlPath, pouName, tagDesc, referencedTypes, templateSheetCount, forceDuplicated, projectTypes));
+    }
 
-    private static string Generate(string xmlPath, string pouName, IReadOnlyDictionary<string, TagInfo>? tagDesc = null, IReadOnlySet<string>? referencedTypes = null, int templateSheetCount = -1, bool forceDuplicated = false)
+    private static string Generate(string xmlPath, string pouName, IReadOnlyDictionary<string, TagInfo>? tagDesc = null, IReadOnlySet<string>? referencedTypes = null, int templateSheetCount = -1, bool forceDuplicated = false, IReadOnlyDictionary<string, ProjectTypeInfo>? projectTypes = null)
     {
         var p = Parse(xmlPath, pouName, tagDesc, referencedTypes);
-        // TriStation stores a duplicated (primary + secondary) diagram for function blocks
-        // and for any POU that appears more than once in the export (one <pou> element per
-        // stored copy); plain programs appear once and are stored once.
-        bool duplicated = p.PouType != "program" || forceDuplicated;
+        // TriStation stores the diagram twice only when the export itself carries two copies of
+        // the POU (one <pou> element per stored document). A normal project keeps a single copy:
+        // writing a second copy here makes the editor draw every block twice on open.
+        bool duplicated = forceDuplicated;
         var plan = BuildPlan(p);
         _ = _commentIds;
         ComputeLayout(plan);
+        // The ST layout above uses the logical wires; the FBD document uses the editor's
+        // net decomposition and its wire ids.
+        DecomposeNets(plan);
+        AssignWireIds(plan);
+        plan.LastId = duplicated ? 2 * plan.PrimarySpan : plan.PrimarySpan;
 
         string sheetTemplate = p.SheetTemplate.Length > 0 ? p.SheetTemplate : "SheetTemplateD";
         string drawingSize = sheetTemplate.StartsWith("SheetTemplate", StringComparison.Ordinal)
@@ -1582,6 +1865,21 @@ public static class FbdGenerator
                 int count = snapCopies * p.Blocks.Count(b => b.TypeName == type);
                 if (!Lib.TryGetValue(type, out var m))
                 {
+                    // A project POU (function block defined by this project): write its catalogue
+                    // identity and interface so instances in other POUs resolve.
+                    if (projectTypes != null && projectTypes.TryGetValue(type, out var pt))
+                    {
+                        sb.Append($"<Class name=\"{Esc(type)}\" dogTag=\"{pt.DogTag}\" type=\"{pt.ElemType}\" subType=\"{pt.SubType}\"")
+                          .Append($" instanceCount=\"{count}\" commentCount=\"0\" extOptFlags=\"{pt.ExtOptFlags}\"")
+                          .Append($" cemEventInputs=\"{pt.CemEI}\" cemActionOutputs=\"{pt.CemAO}\">")
+                          .Append($"<Class Embed=\"eventConnectionsChanged\" eventType=\"0\" eventId=\"{pt.EventId}\" date=\"{Esc(pt.Date)}\" user=\"{pt.User}\"/>")
+                          .Append("<Collection Name=\"declarations\" ClassType=\"CTS2Vars\" CollectionType=\"1\">");
+                        foreach (var pin in pt.Pins)
+                            sb.Append($"<Class name=\"{Esc(pin.Name)}\" dataType=\"{Esc(pin.DataType)}\" initVal=\"{Esc(pin.InitVal)}\" desc=\"\"")
+                              .Append($" varVTType=\"{pin.Vt}\" refCount=\"0\" fbRefCount=\"0\" flags=\"{pin.Flags}\" writes=\"0\"/>");
+                        sb.Append("</Collection></Class>");
+                        continue;
+                    }
                     sb.Append($"<Class name=\"{Esc(type)}\" dogTag=\"0\" type=\"8\" subType=\"1\" instanceCount=\"{count}\"")
                       .Append(" commentCount=\"0\" extOptFlags=\"0\" cemEventInputs=\"0\" cemActionOutputs=\"0\">")
                       .Append("<Class Embed=\"eventConnectionsChanged\" eventType=\"0\" eventId=\"0\" date=\"\" user=\"2\"/>")
@@ -1613,7 +1911,10 @@ public static class FbdGenerator
         foreach (var sheet in sheets)
         {
             bool isFace = sheet.Title.Equals("FACESHEET", StringComparison.OrdinalIgnoreCase);
-            sb.Append(SheetHeader(p.IsBuilt && p.PouType != "program" ? sheet.Number : 0, sheet.Title));
+            // TriStation's XML import writes firstBuildNetwork/lastBuildNetwork = 0 for every
+            // sheet (verified against the reference import). Non-zero values here make the
+            // editor treat the netlist as stale.
+            sb.Append(SheetHeader(0, sheet.Title));
             var only = new HashSet<int> { sheet.Number };
             // The FACESHEET holds each of its comments twice, the copy (id+span) first and
             // then the authored object; a logic sheet holds its objects twice with the
@@ -1674,16 +1975,33 @@ public static class FbdGenerator
         }
 
         var results = new List<string>();
-        // document order over element kinds, interleaving dividers and wires
+        // Document order over element kinds, interleaving dividers and wires.
         var elems = p.ElemOrder
             .Where(e => sheets.Contains(e.Sheet) && !e.Clipped && (skip == null || !skip.Contains(e)))
             .OrderBy(e => e.DocIndex).ToList();
+        var divs = plan.DividerIds.Where(kv => sheets.Contains(kv.Key.Sheet)).OrderBy(kv => kv.Key.DocIndex).ToList();
+        // TriStation writes every comment of a sheet first, in export (document) order -
+        // both frame comments and free notes - then the dividers and the logic items.
+        foreach (var cc in elems.OfType<ExComment>())
+        {
+            int id = ElemIdRaw(plan, cc);
+            string? xml = EmitComment(cc, id + idOffset);
+            if (xml != null) results.Add(xml);
+            if (byAnchor.TryGetValue(id, out var aw))
+                foreach (var w in aw.OrderBy(x => x.Id))
+                    results.Add(EmitWire(plan, w, idOffset));
+        }
+        // Dividers exist once per sheet: the duplicated diagram copy does not repeat them.
+        if (idOffset == 0)
+            foreach (var dv in divs)
+                results.Add(EmitDivider(plan, dv.Key, dv.Value + idOffset));
+        // Emit the logic items in document order.
         foreach (var elem in elems)
         {
+            if (elem is ExComment) continue;
             int id = ElemIdRaw(plan, elem);
             string? xml = elem switch
             {
-                ExComment c => EmitComment(c, id + idOffset),
                 ExVarPlace v => EmitVar(plan, v, id + idOffset, idOffset),
                 ExBlock b => EmitBlock(plan, b, id + idOffset, idOffset),
                 _ => null,
@@ -1693,8 +2011,6 @@ public static class FbdGenerator
                 foreach (var w in aw.OrderBy(x => x.Id))
                     results.Add(EmitWire(plan, w, idOffset));
         }
-        foreach (var dv in plan.DividerIds.Where(kv => sheets.Contains(kv.Key.Sheet)).OrderBy(kv => kv.Key.DocIndex))
-            results.Add(EmitDivider(dv.Key, dv.Value + idOffset));
         return results;
     }
 
@@ -1706,15 +2022,19 @@ public static class FbdGenerator
          + $" lastBuildNetwork=\"{buildNetwork}\" S0=\"\" S1=\"\" S2=\"\" S3=\"\" S4=\"\""
          + " S5=\"\" S6=\"\" S7=\"\" S8=\"\" S9=\"\"><Collection Name=\"displayables\" CollectionType=\"1\">";
 
-    private static string EmitDivider(ExDivider d, int id)
+    private static string EmitDivider(Plan plan, ExDivider d, int id)
     {
         bool horiz = d.Type.Equals("HORIZONTAL", StringComparison.OrdinalIgnoreCase);
-        int posX = d.Type.Equals("HORIZONTAL", StringComparison.OrdinalIgnoreCase) ? 31 : Tx(d.X);
-        int posY = d.Type.Equals("HORIZONTAL", StringComparison.OrdinalIgnoreCase) ? Tx(d.Y) : 31;
-        int width = d.Type.Equals("HORIZONTAL", StringComparison.OrdinalIgnoreCase) ? 3238 : 1;
-        int height = d.Type.Equals("HORIZONTAL", StringComparison.OrdinalIgnoreCase) ? 1 : 3238;
+        // The divider spans the drawing area of the sheet template: 10 x the XML page
+        // width (or height) plus the 18-unit right/bottom margin used by the editor.
+        int sheetW = plan.P.SheetWidth > 0 ? 10 * plan.P.SheetWidth + 18 : 3238;
+        int sheetH = plan.P.SheetHeight > 0 ? 10 * plan.P.SheetHeight + 18 : 2038;
+        int posX = horiz ? 31 : Tx(d.X);
+        int posY = horiz ? Tx(d.Y) : 31;
+        int width = horiz ? sheetW : 1;
+        int height = horiz ? 1 : sheetH;
         return $"<Class ClassType=\"CDGMnetworkDividerXml\" orientation=\"{Esc(d.Type)}\" localId=\"{id}\""
-             + $" posX=\"{posX}\" posY=\"{Tx(d.Y)}\" width=\"{(d.Type == "HORIZONTAL" ? 3238 : 1)}\" height=\"{(d.Type == "HORIZONTAL" ? 1 : 3238)}\"/>";
+             + $" posX=\"{posX}\" posY=\"{posY}\" width=\"{width}\" height=\"{height}\"/>";
     }
 
     private static string EmitComment(ExComment c, int id)
@@ -1733,9 +2053,10 @@ public static class FbdGenerator
     private static string? EmitVar(Plan plan, ExVarPlace v, int id, int idOffset = 0)
     {
         var pp = plan.Places[v];
-        // Only programs tag variable placements with the build network; TriStation never
-        // writes a lineNumber on a placement.
-        string netAttr = plan.P.PouType == "program" ? $" network=\"{v.Sheet}\"" : "";
+        // TriStation's editor keeps an opaque per-placement "network" handle (values such as
+        // 31199/17440/901). It is not carried by the PLCopen export and cannot be derived from
+        // it, so it is omitted rather than invented; the attribute is optional in the schema.
+        string netAttr = "";
         bool wired = pp.OutWire != null && !pp.OutWire.Suppress;
         if (v.IsConstant && v.Kind != "in" && !wired) return null;
         if (v.IsConstant && v.Kind == "in")
@@ -1756,13 +2077,33 @@ public static class FbdGenerator
         sb.Append($"<Class ClassType=\"{cls}\" varName=\"{Esc(v.Expression)}\" localId=\"{id}\"")
           .Append($" posX=\"{Tx(v.X)}\" posY=\"{Tx(v.Y)}\" width=\"{10 * v.W}\" height=\"{10 * v.H}\"{netAttr}");
         if (pp.OutWire != null)
-            sb.Append($" outConnection=\"IN1\" outConnectId=\"{pp.OutWire.Id + idOffset}\"");
+        {
+            if (pp.OutWire.Suppress && pp.OutWire.TargetBlock != null)
+                sb.Append($" outConnection=\"{Esc(pp.OutWire.TargetPin)}\" outConnectId=\"{elementIdOf(plan, pp.OutWire.Target) + idOffset}\"");
+            else
+                sb.Append($" outConnection=\"IN1\" outConnectId=\"{pp.OutWire.Id + idOffset}\"");
+        }
         sb.Append($" annotation=\"{Esc(v.Annotation)}\" annotate=\"{Title(v.Annotate)}\"")
-          .Append($" annotationHeight=\"{v.H - 2}\" annotateMonitorValue=\"{Title(v.MonitorValue)}\"");
+          .Append($" annotationHeight=\"{(Title(v.Annotate) == "True" ? v.H - 2 : 4)}\" annotateMonitorValue=\"{Title(v.MonitorValue)}\"");
         if (pp.InWire != null)
             sb.Append($" inConnection=\"{(pp.InWire.IsBranch ? "IN1" : "OUT1")}\" inConnectId=\"{pp.InWire.Id + idOffset}\"");
         sb.Append("/>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The port name TriStation prints: the platform library's pin name for that position
+    /// when the type is known (the XML's formalParameter can be a stale alias, e.g. "ET"
+    /// for SEL or "CO" for PACK16), otherwise the export's name.
+    /// </summary>
+    private static string PortName(ExBlock b, bool input, int index, string fallback)
+    {
+        if (Lib.TryGetValue(b.TypeName, out var meta))
+        {
+            var pins = meta.Pins.Where(p => (input ? p.Vt == 0 : p.Vt == 1)).ToList();
+            if (index >= 0 && index < pins.Count && pins[index].Name.Length > 0) return pins[index].Name;
+        }
+        return fallback;
     }
 
     private static string EmitBlock(Plan plan, ExBlock b, int id, int idOffset = 0)
@@ -1772,8 +2113,21 @@ public static class FbdGenerator
         var sb = new StringBuilder();
         sb.Append("<Class ClassType=\"").Append(isFn ? "CFBDFunctionXml" : "CFBDFBlockXml").Append('"');
         if (!isFn) sb.Append($" instanceName=\"{Esc(b.InstanceName)}\"");
+        // TriStation sizes the box from its input pins: height = lowest pin row + one pin
+        // pitch. The export usually already carries that height, but multi-input logic blocks
+        // can carry the two-input default (e.g. a 7-input AND exported as height 8) and the
+        // importer recomputes it from the pin rows.
+        int height = 10 * b.H;
+        var rels = b.Inputs.Select(p => p.RelY)
+            .Concat(b.Outputs.Select(p => p.RelY))
+            .Where(y => y > 0).Distinct().OrderBy(y => y).ToList();
+        if (rels.Count >= 2)
+        {
+            int pitch = rels[^1] - rels[^2];
+            if (pitch > 0) height = (rels[^1] + pitch) * 10;
+        }
         sb.Append($" typeName=\"{Esc(b.TypeName)}\" localId=\"{id}\"")
-          .Append($" posX=\"{Tx(b.X)}\" posY=\"{Tx(b.Y)}\" width=\"{10 * b.W}\" height=\"{10 * b.H}\"");
+          .Append($" posX=\"{Tx(b.X)}\" posY=\"{Tx(b.Y)}\" width=\"{10 * b.W}\" height=\"{height}\"");
         // Build network ids on blocks are editor edit-history state (present on some blocks
         // and absent on others), so they are not emitted; the execute sequence is always 0.
         sb.Append($" snapEventId=\"{(Lib.TryGetValue(b.TypeName, out var m) ? m.EventId : 0)}\"")
@@ -1783,26 +2137,36 @@ public static class FbdGenerator
         for (int i = 0; i < b.Inputs.Count; i++)
         {
             var w = bp.InWires[i];
-            if (w == null) continue;
+            string pinName = PortName(b, true, i, b.Inputs[i].Name);
+            string inv = b.Inputs[i].Negated ? " invertedPin=\"True\"" : "";
+            if (w == null || w.Drop)
+            {
+                // Unconnected (or dropped) pins are still listed, with no connection attrs.
+                sb.Append($"<Class{inv} formalParam=\"{Esc(pinName)}\"/>");
+                continue;
+            }
             if (w.Suppress)
             {
                 var sv = (ExVarPlace)w.Source;
-                if (sv.Kind == "in")
-                    sb.Append($"<Class formalParam=\"{Esc(b.Inputs[i].Name)}\" effectiveParam=\"{Esc(sv.Expression)}\"")
-                      .Append($" connectId=\"{elementIdOf(plan, w.Source) + idOffset}\"/>");
-                else
-                    sb.Append($"<Class formalParam=\"{Esc(b.Inputs[i].Name)}\"/>");
+                sb.Append($"<Class{inv} formalParam=\"{Esc(pinName)}\" effectiveParam=\"{Esc(sv.Expression)}\"")
+                  .Append($" connectId=\"{elementIdOf(plan, w.Source) + idOffset}\"/>");
                 continue;
             }
-            sb.Append($"<Class formalParam=\"{Esc(b.Inputs[i].Name)}\" effectiveParam=\"{(w.IsBranch ? "IN1" : "OUT1")}\"")
+            sb.Append($"<Class{inv} formalParam=\"{Esc(pinName)}\" effectiveParam=\"{(w.IsBranch || (ReferenceEquals(w.Source, b) && w.SourcePin == b.Inputs[i].Name) ? "IN1" : "OUT1")}\"")
               .Append($" connectId=\"{w.Id + idOffset}\"/>");
         }
         sb.Append("</Collection>");
         sb.Append("<Collection Name=\"outputs\" ClassType=\"CDGMOutputXml\" CollectionType=\"1\">");
-        foreach (var pin in b.Outputs)
+        for (int oi = 0; oi < b.Outputs.Count; oi++)
         {
+            var pin = b.Outputs[oi];
             bp.OutWires.TryGetValue(pin.Name, out var w);
-            sb.Append($"<Class formalParam=\"{Esc(pin.Name)}\" effectiveParam=\"IN1\" connectId=\"{(w?.Id ?? 0) + (w != null ? idOffset : 0)}\"/>");
+            string inv = pin.Negated ? " invertedPin=\"True\"" : "";
+            string pinName = PortName(b, false, oi, pin.Name);
+            if (w == null)
+                sb.Append($"<Class{inv} formalParam=\"{Esc(pinName)}\"/>");
+            else
+                sb.Append($"<Class{inv} formalParam=\"{Esc(pinName)}\" effectiveParam=\"IN1\" connectId=\"{w.Id + idOffset}\"/>");
         }
         sb.Append("</Collection></Class>");
         return sb.ToString();

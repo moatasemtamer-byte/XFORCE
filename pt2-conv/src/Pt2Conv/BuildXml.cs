@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -88,9 +89,25 @@ public static class BuildXml
         // Rewrite CRCs (preserve orphan meta_crc)
         RewriteCrcs(tree);
 
-        // Remember which programs the embedded base ships with, so we can strip the ones
-        // the XML does not define once every XML program has been inserted/regenerated.
-        var baseProgNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Snapshot of the template tree (after CRC normalisation) for the fast path: when the
+        // converted project ends up identical to the template, the template container can be
+        // reused as-is instead of being re-packed with a different sector layout.
+        var baseStreams = tree.ToDictionary(t => t.Path, t => (byte[])t.Data.Clone(), StringComparer.OrdinalIgnoreCase);
+        string? baseSource = null;
+        if (File.Exists(refMan))
+        {
+            try
+            {
+                var man = JsonSerializer.Deserialize<ManifestDoc>(
+                    File.ReadAllText(refMan), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (!string.IsNullOrWhiteSpace(man?.source) && File.Exists(man.source)) baseSource = man.source;
+            }
+            catch { /* optional */ }
+        }
+
+        // Remember which user elements the embedded base ships with (LibID=1, ElementType 1/2;
+        // library elements have LibID 6..8), so foreign POUs can be stripped from the output.
+        var baseUserNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (useEmbeddedBase)
         {
             int bp = tree.FindIndex(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase));
@@ -101,9 +118,11 @@ public static class BuildXml
                 {
                     if (e.Name.LocalName != "Class") continue;
                     var et = e.Attribute("ElementType");
+                    var lib = e.Attribute("LibID");
                     var nm = e.Attribute("ElemName");
-                    if (et != null && et.Value == "1" && nm != null && !string.IsNullOrEmpty(nm.Value))
-                        baseProgNames.Add(nm.Value);
+                    if (et != null && (et.Value == "1" || et.Value == "2") && lib?.Value == "1"
+                        && nm != null && !string.IsNullOrEmpty(nm.Value))
+                        baseUserNames.Add(nm.Value);
                 }
             }
         }
@@ -159,7 +178,18 @@ public static class BuildXml
 
         var tagDesc = LoadTagDescriptions(tree);
         LoadLibraryFromTemplate(tree);
-        foreach (var pou in pouNames.Where(p => filter == null || wants.Contains(p)))
+        // TriStation's importer creates function blocks first, then the programs; within the
+        // programs it appends them in reverse export order (verified against a reference
+        // import: P01_FB, TEMPLATES, SeimensLogic). DogTags/stream FNames follow that order.
+        var programSet = new HashSet<string>(programNames, StringComparer.OrdinalIgnoreCase);
+        var orderedPous = pouNames.Where(p => !programSet.Contains(p)).ToList();
+        orderedPous.AddRange(pouNames.Where(programSet.Contains).Reverse());
+        // Snapshots for project-defined function blocks: a program that instantiates FB04_DI needs
+        // that FB's catalogue identity and interface in its own FBD stream, otherwise TriStation
+        // shows the instance as unresolved.
+        var projectTypes = BuildProjectTypes(tree, xmlPath, pouEls);
+
+        foreach (var pou in orderedPous.Where(p => filter == null || wants.Contains(p)))
         {
             string lang = PromotesToSt(xmlPath, pou) ? "ST" : "FBD";
             if (!TryGetElementDir(tree, pou, out var dirPrefix))
@@ -176,10 +206,11 @@ public static class BuildXml
                 try
                 {
                     bool isProgram = programNames.Contains(pou);
-                    var r = AddPou.Insert(tree, pou, donor: null, requireExt: "." + lang,
-                                          preferProgram: isProgram,
-                                          requireElementType: isProgram ? 1 : 2);
-                    Console.WriteLine($"  insert {pou}: donor {r.Donor} DogTag {r.DogTag} FName {r.FName} ({r.Streams.Count} stream(s))");
+                    // Imported POUs always use the importer's catalog shape; a donor clone
+                    // would carry the library element's flags/LibID and not match a real
+                    // TriStation import.
+                    var r = AddPou.InsertSynth(tree, pou, isProgram, "." + lang);
+                    Console.WriteLine($"  insert {pou}: DogTag {r.DogTag} FName {r.FName} ({r.Streams.Count} stream(s))");
                 }
                 catch (Exception ex) { Console.WriteLine($"  skip {pou}: {ex.Message}"); continue; }
                 TryGetElementDir(tree, pou, out dirPrefix);
@@ -190,13 +221,45 @@ public static class BuildXml
                                                  t.Path.EndsWith("." + lang, StringComparison.OrdinalIgnoreCase));
                 if (target < 0) { Console.WriteLine($"  skip {pou}: no {lang} stream"); continue; }
                 // The exporter writes one <pou> element per stored diagram copy: a POU that
-                // appears twice is stored as primary + secondary sheet bodies.
-                bool duplicated = pouEls.Count(e => string.Equals((string?)e.Attribute("name"), pou, StringComparison.OrdinalIgnoreCase)) > 1;
+                // appears twice is stored as primary + secondary sheet bodies. The decompiler
+                // emits a single definition and marks the stored-twice case with a comment.
+                bool duplicated = pouEls.Count(e => string.Equals((string?)e.Attribute("name"), pou, StringComparison.OrdinalIgnoreCase)) > 1
+                    || pouEls.Any(e => string.Equals((string?)e.Attribute("name"), pou, StringComparison.OrdinalIgnoreCase)
+                                       && e.Nodes().OfType<System.Xml.Linq.XComment>()
+                                           .Any(c => c.Value.Contains("ts:diagramCopies=2", StringComparison.Ordinal)));
                 byte[] gen = lang == "FBD"
-                    ? FbdGenerator.GenerateBytes(xmlPath, pou, tagDesc, referencedTypes, CountSheets(tree[target].Data), duplicated)
+                    ? FbdGenerator.GenerateBytes(xmlPath, pou, tagDesc, referencedTypes, CountSheets(tree[target].Data), duplicated, projectTypes)
                     : StGenerator.Generate(xmlPath, pou);
                 long oldLen = tree[target].Data.Length;
+                byte[] templateBytes = tree[target].Data;
+                bool unchanged = lang == "FBD"
+                    ? FbdGenerator.ContentMatchesTemplate(Encoding.UTF8.GetString(gen), Encoding.UTF8.GetString(templateBytes))
+                    : gen.AsSpan().SequenceEqual(templateBytes);
+                if (unchanged)
+                {
+                    // Same content as the template project: keep its exact stream (localIds,
+                    // network handles, emission order, timestamps) instead of regenerating.
+                    Console.WriteLine($"  {pou}: {(lang == "FBD" ? "FBD" : "ST ")} unchanged (template kept)");
+                    continue;
+                }
                 tree[target] = (tree[target].Path, gen);
+                if (lang == "FBD") PopulateUnresolvedTagnames(tree, pou, Encoding.UTF8.GetString(gen));
+                ReportDroppedPlacements(doc, pou, lang);
+                // TriStation also stores a CTS2Doc for ST POUs (the documentation page);
+                // FBD POUs have none in the reference import.
+                if (lang == "ST")
+                {
+                    string stPath = tree[target].Path;
+                    string docPath = stPath[..^3] + ".DOC";
+                    byte[] docBytes = DocGenerator.Generate(xmlPath, pou);
+                    int di = tree.FindIndex(t => t.Path.Equals(docPath, StringComparison.OrdinalIgnoreCase));
+                    if (di >= 0) tree[di] = (tree[di].Path, docBytes);
+                    else
+                    {
+                        tree.Add((docPath, docBytes));
+                        tree.Add((docPath + "_crc", Array.Empty<byte>()));
+                    }
+                }
                 Console.WriteLine($"  {pou}: {(lang == "FBD" ? "FBD" : "ST ")} {oldLen} -> {gen.Length} B");
             }
             catch (Exception ex)
@@ -205,15 +268,15 @@ public static class BuildXml
             }
         }
 
-        // Remove leftover base programs that the XML does not define (only when using the
-        // embedded base, since a user-supplied template is expected to keep its own layout).
-        if (useEmbeddedBase && baseProgNames.Count > 0)
+        // Remove leftover base user elements that the XML does not define (only when using
+        // the embedded base; with a user-supplied template, its own POUs are intentional).
+        if (useEmbeddedBase && baseUserNames.Count > 0)
         {
-            var toRemove = baseProgNames.Where(b => !pouNames.Contains(b, StringComparer.OrdinalIgnoreCase)).ToList();
+            var toRemove = baseUserNames.Where(b => !pouNames.Contains(b, StringComparer.OrdinalIgnoreCase)).ToList();
             if (toRemove.Count > 0)
             {
-                RemoveBasePrograms(tree, toRemove);
-                Console.WriteLine($"  removed base program(s): {string.Join(", ", toRemove)}");
+                RemoveBaseElements(tree, toRemove);
+                Console.WriteLine($"  removed base element(s): {string.Join(", ", toRemove)}");
             }
         }
 
@@ -234,15 +297,227 @@ public static class BuildXml
             }
         }
 
+        // Phase 2b: adopt the project's library binaries from the XML's LIBRARY_DATA blobs.
+        // TriStation embeds each library as a nested compound file; when the XML comes from a
+        // project whose libraries differ from the template's, the template binaries would link
+        // the wrong (older) library. Same-size streams are left alone because TriStation keeps
+        // its own copy for the current install.
+        AdoptLibraryBinaries(tree, doc);
+
+        // The importer writes the XML's contentDescription into the project header.
+        string contentDescription = doc.Descendants()
+            .FirstOrDefault(e => e.Name.LocalName == "fileHeader")
+            ?.Attribute("contentDescription")?.Value ?? "";
+        if (contentDescription.Length > 0) SetProjectDescription(tree, contentDescription);
+
+        // Phase 2c: rebuild the hardware configuration when the XML's chassis/board layout differs
+        // from the template's (module setup blocks are module-library data, captured per module id).
+        HwConfig.Apply(tree, doc);
+
         // Recompute CRC for newly generated streams.
         RewriteCrcs(tree);
         Program.RewriteGlobalCrc(tree);
-
         var dirOut = Path.GetDirectoryName(outPath);
         if (!string.IsNullOrEmpty(dirOut)) Directory.CreateDirectory(dirOut);
+
+        bool identical = tree.Count == baseStreams.Count && tree.All(t =>
+            baseStreams.TryGetValue(t.Path, out var b) && t.Data.AsSpan().SequenceEqual(b));
+        if (identical)
+        {
+            if (useEmbeddedBase)
+            {
+                File.WriteAllBytes(outPath, EmbeddedBase.LoadPt2xBytes());
+                Console.WriteLine($"Wrote {outPath} (unchanged: template container reused)");
+                return 0;
+            }
+            if (baseSource != null && !string.Equals(Path.GetFullPath(baseSource), Path.GetFullPath(outPath), StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(baseSource, outPath);
+                Console.WriteLine($"Wrote {outPath} (unchanged: template container reused)");
+                return 0;
+            }
+        }
+
         CompoundFileWriter.Write(outPath, tree);
         Console.WriteLine($"Wrote {outPath} ({tree.Count} streams)");
         return 0;
+    }
+
+    /// <summary>
+    /// Mirrors the importer's per-element xref: a program's declarations whose flags are
+    /// 65536 are program-local names not present in the tag database, and TriStation lists
+    /// them in the catalog entry's UnresolvedTagnames collection (used by the cross-reference
+    /// report). Function blocks have none.
+    /// </summary>
+    private static void PopulateUnresolvedTagnames(List<(string Path, byte[] Data)> tree, string pou, string fbdXml)
+    {
+        int ds = fbdXml.IndexOf("<Collection Name=\"declarations\"", StringComparison.Ordinal);
+        if (ds < 0) return;
+        int de = fbdXml.IndexOf("</Collection>", ds, StringComparison.Ordinal);
+        var decl = de < 0 ? fbdXml[ds..] : fbdXml[ds..de];
+        var names = new List<string>();
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(decl,
+                     "<Class name=\"([^\"]*)\"[^>]*? flags=\"65536\""))
+        {
+            string n = System.Net.WebUtility.HtmlDecode(m.Groups[1].Value);
+            if (n.Length > 0) names.Add(n);
+        }
+
+        int px = tree.FindIndex(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase));
+        if (px < 0) return;
+        var doc = XDocument.Parse(Encoding.UTF8.GetString(tree[px].Data), LoadOptions.PreserveWhitespace);
+        var entry = doc.Descendants().FirstOrDefault(e =>
+            e.Name.LocalName == "Class" &&
+            string.Equals((string?)e.Attribute("ElemName"), pou, StringComparison.OrdinalIgnoreCase));
+        if (entry == null) return;
+        var col = entry.Elements().FirstOrDefault(e =>
+            e.Name.LocalName == "Collection" && (string?)e.Attribute("Name") == "UnresolvedTagnames");
+        if (col == null) return;
+        var existing = col.Elements().Where(e => e.Name.LocalName == "Class")
+            .Select(e => (string?)e.Attribute("Value") ?? "").ToList();
+        if (existing.Count == names.Count && existing.SequenceEqual(names, StringComparer.Ordinal)) return;
+        col.RemoveNodes();
+        foreach (var n in names) col.Add(new XElement("Class", new XAttribute("Value", n)));
+        tree[px] = ("Current/Project.xml", AddPou.SerializeProject(doc.Root!));
+    }
+
+    /// <summary>Sets the project header description, preserving the single-line format.</summary>
+    private static void SetProjectDescription(List<(string Path, byte[] Data)> tree, string description)
+    {
+        int px = tree.FindIndex(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase));
+        if (px < 0) return;
+        var doc = XDocument.Parse(Encoding.UTF8.GetString(tree[px].Data), LoadOptions.PreserveWhitespace);
+        if (doc.Root == null) return;
+        if ((string?)doc.Root.Attribute("Description") == description) return;
+        doc.Root.SetAttributeValue("Description", description);
+        tree[px] = ("Current/Project.xml", AddPou.SerializeProject(doc.Root));
+    }
+
+    /// <summary>
+    /// Collects the interface (pins) of every project function block plus its catalogue identity
+    /// (DogTag, ElementType/SubType, flags, event). Used to write the snapshot of an FB instance
+    /// inside another POU; without it the instance is unresolved when the project is opened.
+    /// </summary>
+    private static Dictionary<string, FbdGenerator.ProjectTypeInfo> BuildProjectTypes(
+        List<(string Path, byte[] Data)> tree, string xmlPath, List<XElement> pouEls)
+    {
+        var map = new Dictionary<string, FbdGenerator.ProjectTypeInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in pouEls)
+        {
+            string name = (string?)e.Attribute("name") ?? "";
+            string pouType = (string?)e.Attribute("pouType") ?? "";
+            if (name.Length == 0 || pouType == "program") continue;
+            try { map[name] = FbdGenerator.BuildProjectType(xmlPath, name); }
+            catch { /* a malformed POU keeps the unknown-type fallback */ }
+        }
+        if (map.Count == 0) return map;
+
+        int px = tree.FindIndex(t => t.Path.Equals("Current/Project.xml", StringComparison.OrdinalIgnoreCase));
+        if (px < 0) return map;
+        try
+        {
+            var doc = XDocument.Parse(Encoding.UTF8.GetString(tree[px].Data), LoadOptions.PreserveWhitespace);
+            foreach (var c in doc.Descendants().Where(c => c.Name.LocalName == "Class" && c.Attribute("ElemName") != null))
+            {
+                string n = (string)c.Attribute("ElemName")!;
+                if (!map.TryGetValue(n, out var info)) continue;
+                if (int.TryParse((string?)c.Attribute("DogTag"), out int dog)) info.DogTag = dog;
+                if (int.TryParse((string?)c.Attribute("ElementType"), out int et)) info.ElemType = et;
+                if (int.TryParse((string?)c.Attribute("ElementSubType"), out int st)) info.SubType = st;
+                if (int.TryParse((string?)c.Attribute("ExtOptionFlags"), out int xo)) info.ExtOptFlags = xo;
+                if (int.TryParse((string?)c.Attribute("CemEventInputs"), out int ci)) info.CemEI = ci;
+                if (int.TryParse((string?)c.Attribute("CemActionOutputs"), out int co)) info.CemAO = co;
+                var ev = c.Elements().FirstOrDefault(x =>
+                    x.Name.LocalName == "Class" && (string?)x.Attribute("Embed") == "EventConnectionsChanged");
+                if (ev != null)
+                {
+                    if (int.TryParse((string?)ev.Attribute("eventId"), out int eid)) info.EventId = eid;
+                    if (int.TryParse((string?)ev.Attribute("user"), out int usr)) info.User = usr;
+                    info.Date = (string?)ev.Attribute("date") ?? "";
+                }
+            }
+        }
+        catch { /* catalogue is best-effort */ }
+        return map;
+    }
+
+    /// <summary>
+    /// Reports drawn placements TriStation cannot represent (empty, numeric, "dir/…", "L%4102",
+    /// or reserved names). The importer drops them silently, so surfacing the count keeps the loss
+    /// visible instead of letting the conversion look lossless.
+    /// </summary>
+    private static void ReportDroppedPlacements(XDocument doc, string pou, string lang)
+    {
+        if (lang != "FBD") return;
+        var el = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "pou"
+            && string.Equals((string?)e.Attribute("name"), pou, StringComparison.Ordinal));
+        if (el == null) return;
+
+        var dropped = new List<string>();
+        foreach (var v in el.Descendants().Where(e => e.Name.LocalName is "inVariable" or "outVariable" or "inOutVariable"))
+        {
+            string expr = v.Elements().FirstOrDefault(e => e.Name.LocalName == "expression")?.Value?.Trim() ?? "";
+            bool constant = v.Name.LocalName == "inVariable" &&
+                            (double.TryParse(expr, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
+                             || expr.StartsWith("16#", StringComparison.OrdinalIgnoreCase)
+                             || expr.Equals("TRUE", StringComparison.OrdinalIgnoreCase)
+                             || expr.Equals("FALSE", StringComparison.OrdinalIgnoreCase));
+            if (!FbdGenerator.IsDeclarableName(expr) && !constant) dropped.Add(expr);
+        }
+        if (dropped.Count == 0) return;
+        var sample = string.Join(", ", dropped.Distinct().Take(4).Select(s => s.Length == 0 ? "(empty)" : s));
+        Console.WriteLine($"  {pou}: {dropped.Count} placement(s) with a name TriStation cannot store were dropped ({sample})");
+    }
+
+    /// <summary>
+    /// Copies the compiled library binaries (<c>Current/Bin/*</c> .EMA/.NCA/.emo/.nco) out of
+    /// the XML's embedded <c>LIBRARY_DATA</c> compound files when they differ in size from the
+    /// template's copy — that means the XML was exported from a TriStation with a different
+    /// library build. Same-size streams are kept as-is: TriStation itself keeps the installed
+    /// copy on import, so replacing them would only diverge from the reference import.
+    /// </summary>
+    private static void AdoptLibraryBinaries(List<(string Path, byte[] Data)> tree, XDocument doc)
+    {
+        var config = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "LIBRARY_CONFIGURATION");
+        if (config == null) return;
+
+        var current = tree.ToDictionary(t => t.Path, t => t.Data, StringComparer.OrdinalIgnoreCase);
+        foreach (var lib in config.Elements().Where(e => e.Name.LocalName == "LIBRARY"))
+        {
+            string name = (string?)lib.Attribute("Name") ?? "";
+            var dataEl = lib.Elements().FirstOrDefault(e => e.Name.LocalName == "LIBRARY_DATA");
+            if (dataEl == null || dataEl.Value.Length == 0) continue;
+
+            byte[] blob;
+            try { blob = Convert.FromBase64String(dataEl.Value.Trim()); } catch { continue; }
+            if (blob.Length < 8 || blob[0] != 0xD0 || blob[1] != 0xCF) continue;
+
+            List<Pt2Conv.Cfb.StreamContent> streams;
+            try { streams = new CompoundFile(blob).ListStreams(); } catch { continue; }
+            var bins = streams
+                .Where(s => s.Path.StartsWith("Current/Bin/", StringComparison.OrdinalIgnoreCase)
+                            && s.Data.Length > 0
+                            && !s.Path.EndsWith("_crc", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (bins.Count == 0) continue;
+
+            // Adopt the whole library when any binary has a different size (newer library build).
+            bool adopt = bins.Any(s => !current.TryGetValue(s.Path, out var old) || old.Length != s.Data.Length);
+            if (!adopt) continue;
+
+            foreach (var s in bins)
+            {
+                int i = tree.FindIndex(t => t.Path.Equals(s.Path, StringComparison.OrdinalIgnoreCase));
+                if (i >= 0) tree[i] = (tree[i].Path, s.Data);
+                else
+                {
+                    tree.Add((s.Path, s.Data));
+                    tree.Add((s.Path + "_crc", Array.Empty<byte>()));
+                }
+                current[s.Path] = s.Data;
+            }
+            Console.WriteLine($"  library {name}: adopted {bins.Count} binary stream(s) from the XML");
+        }
     }
 
     private static void RewriteCrcs(List<(string Path, byte[] Data)> streams)
@@ -262,11 +537,11 @@ public static class BuildXml
     }
 
     /// <summary>
-    /// Removes the catalog entries and element streams for the given base program names.
-    /// Only used when the embedded base is the reference so that a foreign project's
-    /// programs do not remain in the output alongside the XML's own programs.
+    /// Removes the catalog entries and element streams for the given base element names.
+    /// Only used when the embedded base is a project template, so that its user POUs do not
+    /// remain in the output alongside the XML's own POUs.
     /// </summary>
-    private static void RemoveBasePrograms(List<(string Path, byte[] Data)> tree, List<string> names)
+    private static void RemoveBaseElements(List<(string Path, byte[] Data)> tree, List<string> names)
     {
         var nameSet = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
         var keep = new List<(string Path, byte[] Data)>();
@@ -285,17 +560,19 @@ public static class BuildXml
                     {
                         foreach (var cls in els.Elements().ToList())
                         {
-                            if (cls.Name.LocalName == "Class" &&
-                                cls.Attribute("ElementType")?.Value == "1" &&
+                            if (cls.Name.LocalName != "Class") continue;
+                            string et = cls.Attribute("ElementType")?.Value ?? "";
+                            if ((et == "1" || et == "2") &&
                                 nameSet.Contains(cls.Attribute("ElemName")?.Value ?? ""))
-                            {
                                 cls.Remove();
-                            }
                         }
+                        int maxDog = 0;
+                        foreach (var cls in els.Elements().Where(e => e.Name.LocalName == "Class"))
+                            if (int.TryParse(cls.Attribute("DogTag")?.Value, out int d) && d > maxDog) maxDog = d;
+                        root.SetAttributeValue("NextElementDogTag", maxDog.ToString());
                     }
                 }
-                keep.Add((s.Path, Encoding.UTF8.GetBytes(
-                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + root + "\n")));
+                keep.Add((s.Path, AddPou.SerializeProject(root)));
                 continue;
             }
             keep.Add(s);

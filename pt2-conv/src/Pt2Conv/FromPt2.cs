@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -80,7 +81,9 @@ public sealed partial class FromPt2
         self.CollectReferencedGlobals(blocks);
         var xml = self.Translate(blocks, projName, referencedOnly);
         if (xml.EndsWith("\n", StringComparison.Ordinal)) xml = xml.Substring(0, xml.Length - 1);
-        xml = ToCrlf(xml);
+        // TriStation writes the XML with LF line endings (also inside CDATA text), so the
+        // structural lines must not be converted to CRLF.
+        xml = xml.Replace("\r\n", "\n");
         File.WriteAllText(outPath, xml, new UTF8Encoding(false));
         int pouCount = blocks.Count(b => b.Sheets.Count > 0 || b.St != null);
         Console.WriteLine($"Wrote {outPath} ({xml.Length:N0} chars): {pouCount} POU(s), {tags.Count} tag(s)");
@@ -278,6 +281,7 @@ public sealed partial class FromPt2
             Description = self.ProjectDescription(),
             ShortName = self._projectShort,
             Version = self.ProjectVersion(),
+            Created = self.ProjectCreated(),
         };
 
         // The project level macro values.
@@ -379,6 +383,7 @@ public sealed partial class FromPt2
                     TypeName = blk.TypeName,
                     Instance = blk.Instance,
                     IsFunction = blk.IsFunction,
+                    DoubleSpace = blk.DoubleSpace,
                     Inputs = blk.Inputs.Select(p => new PdfPin { Name = p.Name, Wire = p.Wire }).ToList(),
                     Outputs = blk.Outputs.Select(o => o.Name).ToList(),
                 };
@@ -396,6 +401,7 @@ public sealed partial class FromPt2
                     X = v.RawX, Y = v.RawY, W = v.RawW, H = v.RawH,
                     Name = v.Name,
                     VarType = v.VarType,
+                    IsConstant = v.IsConstant,
                     Annotation = annotation,
                     Annotate = v.Annotate,
                     HasInWire = v.InWire > 0,
@@ -440,6 +446,7 @@ public sealed partial class FromPt2
                     typeName = blk.TypeName,
                     instance = blk.Instance,
                     isFunction = blk.IsFunction,
+                    doubleSpace = blk.DoubleSpace,
                     inputs = blk.Inputs.Select(p => new { name = p.Name, wire = p.Wire }).ToArray(),
                     outputs = blk.Outputs.Select(o => o.Name).ToArray(),
                 };
@@ -462,6 +469,7 @@ public sealed partial class FromPt2
                     h = v.RawH,
                     name = v.Name,
                     varType = v.VarType,
+                    isConstant = v.IsConstant,
                     annotation,
                     annotate = v.Annotate,
                     inWire = v.InWire,
@@ -582,6 +590,18 @@ public sealed partial class FromPt2
             string minor = (string?)root.Attribute("MinorProjectVersion") ?? "";
             if (major.Length == 0) return "";
             return minor.Length > 0 ? major + "." + minor : major;
+        }
+        catch (Exception) { return ""; }
+    }
+
+    /// <summary>The project's creation timestamp (ProjectInfo/ProjectInfo.Xml).</summary>
+    private string ProjectCreated()
+    {
+        if (!_streams.TryGetValue("ProjectInfo/ProjectInfo.Xml", out var data)) return "";
+        try
+        {
+            var root = XDocument.Parse(Encoding.UTF8.GetString(data)).Root;
+            return (string?)root?.Attribute("ProjectCreatedDate") ?? "";
         }
         catch (Exception) { return ""; }
     }
@@ -855,8 +875,90 @@ public sealed partial class FromPt2
                 PI_PointGearRatio = Get(f, "PI_PointGearRatio"),
             });
         }
+        AssignPointBins(streams, tags);
         return tags;
     }
+
+    /// <summary>
+    /// Recovers the POINT_ASSIGNMENT BinNumber/BinOffset the XML export carries. The CSV
+    /// does not store them: they are a function of the physical address.
+    ///   * memory areas: fixed bin per prefix (MBR=3, MBN=13, MIN=14, MRN=15, ...), offset =
+    ///     the decimal tail - 1;
+    ///   * I/O: chassis.slot.point, where each module owns 32 consecutive points of its class
+    ///     (0=DO, 2=DI, 4=AI) in HwConfiguration order.
+    /// </summary>
+    private static void AssignPointBins(Dictionary<string, byte[]> streams, List<Pt2Tag> tags)
+    {
+        var io = new Dictionary<(int Chassis, int Slot), (int Bin, int Base)>();
+        var memBin = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["MBR"] = 3, ["MBN"] = 13, ["MIN"] = 14, ["MRN"] = 15,
+            ["MRR"] = 7, ["MIW"] = 11, ["MIR"] = 5,
+        };
+        try
+        {
+            if (streams.TryGetValue("Current/Elements/Configuration/HwConfiguration.xml", out var hw))
+            {
+                var root = XDocument.Parse(Encoding.UTF8.GetString(hw)).Root;
+                var chassisCol = root?.Descendants().FirstOrDefault(e =>
+                    e.Name.LocalName == "Collection" && (string?)e.Attribute("Name") == "HwChassis");
+                if (chassisCol != null)
+                {
+                    int chassisIndex = 0;
+                    foreach (var ch in chassisCol.Elements().Where(e => e.Name.LocalName == "Class"))
+                    {
+                        string cname = (string?)ch.Attribute("Name") ?? "";
+                        string cnum = (string?)ch.Attribute("ChassisNum") ?? "";
+                        if (cnum == "-1" || cname.Contains("Memory", StringComparison.OrdinalIgnoreCase)) continue;
+                        chassisIndex++;
+                        var boards = ch.Descendants().FirstOrDefault(e =>
+                            e.Name.LocalName == "Collection" && (string?)e.Attribute("Name") == "Boards");
+                        if (boards == null) continue;
+                        var next = new Dictionary<int, int>();
+                        foreach (var b in boards.Elements().Where(e => e.Name.LocalName == "Class"))
+                        {
+                            int slot = int.TryParse((string?)b.Attribute("SlotID"), out var sl) ? sl + 1 : 0;
+                            string bname = (string?)b.Attribute("Name") ?? "";
+                            int bin = bname.Contains("Discrete Input", StringComparison.OrdinalIgnoreCase) ? 2
+                                    : bname.Contains("Discrete Output", StringComparison.OrdinalIgnoreCase) ? 0
+                                    : bname.Contains("Analog Input", StringComparison.OrdinalIgnoreCase) ? 4 : -1;
+                            if (bin < 0 || slot <= 0) continue;
+                            int baseOff = next.TryGetValue(bin, out var r) ? r : 0;
+                            io[(chassisIndex, slot)] = (bin, baseOff);
+                            next[bin] = baseOff + 32;
+                        }
+                    }
+                }
+            }
+        }
+        catch { /* hardware map is best-effort; fall back to 0/0 */ }
+
+        foreach (var t in tags)
+        {
+            string addr = (t.Address.Length > 0 ? t.Address : t.PhysicalAddress).Trim();
+            var m = System.Text.RegularExpressions.Regex.Match(addr, @"^(\d{2})\.(\d{2})\.(\d{2})$");
+            if (m.Success)
+            {
+                int chassis = int.Parse(m.Groups[1].Value);
+                int slot = int.Parse(m.Groups[2].Value);
+                int point = int.Parse(m.Groups[3].Value);
+                if (io.TryGetValue((chassis, slot), out var e))
+                {
+                    t.Bin = e.Bin.ToString(CultureInfo.InvariantCulture);
+                    t.BinOffset = (e.Base + point - 1).ToString(CultureInfo.InvariantCulture);
+                }
+                continue;
+            }
+            var mm = System.Text.RegularExpressions.Regex.Match(addr, @"^([A-Za-z]{2,4})\.(\d{1,5})$");
+            if (mm.Success && memBin.TryGetValue(mm.Groups[1].Value, out int bin))
+            {
+                int tail = int.Parse(mm.Groups[2].Value);
+                t.Bin = bin.ToString(CultureInfo.InvariantCulture);
+                t.BinOffset = Math.Max(0, tail - 1).ToString(CultureInfo.InvariantCulture);
+            }
+        }
+    }
+
 
     /// <summary>Minimal RFC-4180 CSV splitter (quoted fields, doubled quotes).</summary>
     private static string[] CsvFields(string line)
@@ -1027,7 +1129,9 @@ public sealed partial class FromPt2
                 if (name.Length == 0) continue;
                 string dt = (string?)c.Attribute("dataType") ?? "BOOL";
                 string vt = (string?)c.Attribute("varVTType") ?? "0";
-                bool isInstance = vt == "3" && (Int(c, "fbRefCount") > 0 || Int(c, "flags") != 0);
+                // TriStation omits single-reference auto-generated instances (refCount 1) from the
+                // XML interface; every other local declaration is exported.
+                bool isInstance = vt == "3" && Int(c, "refCount") <= 1;
                 string section = vt switch
                 {
                     "0" => "input",
@@ -1052,6 +1156,34 @@ public sealed partial class FromPt2
         var sheets = Child(root, "Collection", "sheets");
         if (sheets != null)
         {
+            // A document is stored twice when most of its displayables repeat. Counting the
+            // repeats on the raw elements lets us tell a duplicated diagram (drop the second
+            // copy) from a single-copy one that happens to contain a few identical placements
+            // (keep them).
+            int totalDisp = 0, duplicateDisp = 0;
+            foreach (var sheetClass in sheets.Elements().Where(e => e.Name.LocalName == "Class"))
+            {
+                var disp = Child(sheetClass, "Collection", "displayables");
+                if (disp == null) continue;
+                var sigs = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var c in disp.Elements().Where(e => e.Name.LocalName == "Class"))
+                {
+                    string ct = (string?)c.Attribute("ClassType") ?? "";
+                    if (!(ct.Contains("VarXml", StringComparison.Ordinal) || ct.Contains("Block", StringComparison.Ordinal)
+                          || ct.Contains("Function", StringComparison.Ordinal) || ct.Contains("Comment", StringComparison.Ordinal)
+                          || ct.Contains("Divider", StringComparison.Ordinal))) continue;
+                    totalDisp++;
+                    if (!sigs.Add(RawSig(c))) duplicateDisp++;
+                }
+            }
+            // The container stores the whole diagram twice (each element at id and id+span). A
+            // few identical placements exist legitimately, so require a quarter of the elements
+            // to repeat before treating the document as a two-copy one.
+            bool dedup = block.PouType != "program" || (totalDisp > 0 && duplicateDisp * 4 >= totalDisp);
+            // A document whose diagram is stored twice (primary + snapshot copy) is flagged so the
+            // XML → PT2X direction writes the second copy again. Native projects store it once.
+            block.StoredTwice = totalDisp > 0 && duplicateDisp * 4 >= totalDisp;
+
             int number = 0;
             foreach (var sheetClass in sheets.Elements().Where(e => e.Name.LocalName == "Class"))
             {
@@ -1063,7 +1195,7 @@ public sealed partial class FromPt2
                     sheet.Macros[i] = val;
                 }
                 var disp = Child(sheetClass, "Collection", "displayables");
-                if (disp != null) ReadSheet(sheet, disp);
+                if (disp != null) ReadSheet(sheet, disp, dedup);
                 if (sheet.Elems.Count > 0 || sheet.Dividers.Count > 0) block.Sheets.Add(sheet);
             }
         }
@@ -1080,13 +1212,15 @@ public sealed partial class FromPt2
         e.W = Math.Max(1, Size(rw)); e.H = Math.Max(1, Size(rh));
     }
 
-    private static void ReadSheet(Pt2Sheet sheet, XElement displayables)
+    private static bool ReadSheet(Pt2Sheet sheet, XElement displayables, bool dedup)
     {
-        // TriStation stores every drawing element twice: the live one and a snapshot
-        // copy of the same element (same class, same geometry, same content, but a
-        // different localId). Only the live set is printed, so duplicates are dropped
-        // by their signature - keeping the first occurrence in document order.
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // TriStation stores every drawing element twice: the live one and a snapshot copy of the
+        // same element (same class, same geometry, same content, but a different localId). When
+        // the pre-scan says the document is duplicated, only the live set is printed, so
+        // duplicates are dropped by their signature. The live copy is the one with the lower
+        // localId, so the kept element takes the smallest id of its duplicate group.
+        var seen = new Dictionary<string, (int Id, Action<int> Set)>(StringComparer.Ordinal);
+        bool duplicated = false;
         var wires = new List<Pt2Wire>();
 
         foreach (var c in displayables.Elements().Where(e => e.Name.LocalName == "Class"))
@@ -1104,7 +1238,9 @@ public sealed partial class FromPt2
                          Instance = (string?)c.Attribute("instanceName") ?? "",
                          IsFunction = ct == "CFBDFunctionXml",
                          DoubleSpace = string.Equals((string?)c.Attribute("doubleSpace"), "True", StringComparison.OrdinalIgnoreCase),
-                         Collapsed = string.Equals((string?)c.Attribute("snapEventId"), "0", StringComparison.Ordinal),
+                         // snapEventId="0" is simply "no snapshot event" (the common value for
+                         // blocks drawn in TriStation); it does not mean a collapsed box.
+                         Collapsed = false,
                      };
                     Place(b, c);
                     var inputs = Child(c, "Collection", "inputs");
@@ -1125,7 +1261,7 @@ public sealed partial class FromPt2
                                 Wire = AttrInt(pin, "connectId"),
                                 Negated = string.Equals((string?)pin.Attribute("invertedPin"), "True", StringComparison.OrdinalIgnoreCase),
                             });
-                    if (!seen.Add(Sig(ct, c, b.TypeName, b.Instance))) break;
+                    if (dedup && !KeepElement(seen, Sig(ct, c, b.TypeName, b.Instance), b.OldId, v => b.OldId = v)) { duplicated = true; continue; }
                     sheet.Elems.Add(b);
                     break;
                 }
@@ -1153,7 +1289,7 @@ public sealed partial class FromPt2
                         OutWire = AttrInt(c, "outConnectId"),
                     };
                     Place(v, c);
-                    if (!seen.Add(Sig(ct, c, v.Name, v.VarType))) break;
+                    if (dedup && !KeepElement(seen, Sig(ct, c, v.Name, v.VarType), v.OldId, id => v.OldId = id)) { duplicated = true; continue; }
                     sheet.Elems.Add(v);
                     break;
                 }
@@ -1197,7 +1333,7 @@ public sealed partial class FromPt2
                     d.Y = Pos(d.RawY);
                     d.W = Size(d.RawW);
                     d.H = Size(d.RawH);
-                    if (!seen.Add(Sig(ct, c, d.Orientation, ""))) break;
+                    if (dedup && !KeepElement(seen, Sig(ct, c, d.Orientation, ""), d.OldId, id => d.OldId = id)) { duplicated = true; continue; }
                     sheet.Dividers.Add(d);
                     break;
                 }
@@ -1217,7 +1353,7 @@ public sealed partial class FromPt2
                      };
                     if (comment.TextSize <= 0) comment.TextSize = 10;
                     Place(comment, c);
-                    if (!seen.Add(Sig(ct, c, comment.Text, comment.Border))) break;
+                    if (dedup && !KeepElement(seen, Sig(ct, c, comment.Text, comment.Border), comment.OldId, id => comment.OldId = id)) { duplicated = true; continue; }
                     sheet.Elems.Add(comment);
                     break;
                 }
@@ -1248,6 +1384,35 @@ public sealed partial class FromPt2
             order.Add(w);
         }
         sheet.Wires.AddRange(order);
+        return duplicated;
+    }
+
+    /// <summary>Records an element signature for the duplicate-copy pass. Returns false when the
+    /// element repeats an earlier one (the duplicate is dropped and the kept element takes the
+    /// lower of the two localIds, which is the live copy TriStation exports).</summary>
+    private static bool KeepElement(Dictionary<string, (int Id, Action<int> Set)> seen, string signature, int id, Action<int> setId)
+    {
+        if (seen.TryGetValue(signature, out var prev))
+        {
+            if (id < prev.Id) { prev.Set(id); seen[signature] = (id, prev.Set); }
+            return false;
+        }
+        seen[signature] = (id, setId);
+        return true;
+    }
+
+    /// <summary>Coarse signature for the duplicate-copy pre-scan (name/type/orientation/text).</summary>
+    private static string RawSig(XElement c)
+    {
+        string ct = (string?)c.Attribute("ClassType") ?? "";
+        string a = (string?)c.Attribute("varName")
+            ?? (string?)c.Attribute("typeName")
+            ?? (string?)c.Attribute("orientation")
+            ?? "";
+        string b = (string?)c.Attribute("instanceName")
+            ?? c.Elements().FirstOrDefault(e => e.Name.LocalName == "CData")?.Value
+            ?? "";
+        return Sig(ct, c, a, b);
     }
 
     /// <summary>Identity of a drawing element: its class, its place on the sheet and its content.</summary>
@@ -1351,9 +1516,15 @@ public sealed partial class FromPt2
           .Append("    </coordinateInfo>\n");
         sb.Append("  </contentHeader>\n");
         sb.Append("  <types>\n    <dataTypes />\n    <pous>\n");
-        foreach (var b in blocks)
+        // One <pou> per program/function block. TriStation's own export repeats the function
+        // blocks (and programs whose diagram was stored twice); importing such a file merges
+        // the duplicate definitions and renders every block twice, so the decompiler emits the
+        // canonical single definition instead. Programs keep the project's reverse order.
+        var pouList = blocks.Where(b => b.Sheets.Count > 0 || b.St != null).ToList();
+        var fbs = pouList.Where(b => b.PouType != "program").ToList();
+        var progs = Enumerable.Reverse(pouList.Where(b => b.PouType == "program").ToList()).ToList();
+        foreach (var b in fbs.Concat(progs))
         {
-            if (b.Sheets.Count == 0 && b.St == null) continue;
             try { EmitPou(sb, b); }
             catch (Exception ex) { Console.Error.WriteLine($"  block {b.Name}: {ex.Message}"); }
         }
@@ -1369,13 +1540,24 @@ public sealed partial class FromPt2
 
     private void EmitPou(StringBuilder sb, Pt2Block b)
     {
-        sb.Append("      <pou name=\"").Append(Esc(b.Name)).Append("\" version=\"1.0\" pouType=\"").Append(b.PouType).Append("\">\n");
+        // Programs are exported with schema version 1.1, function blocks and functions with 1.0.
+        string version = b.PouType == "program" ? "1.1" : "1.0";
+        sb.Append("      <pou name=\"").Append(Esc(b.Name)).Append("\" version=\"").Append(version)
+          .Append("\" pouType=\"").Append(b.PouType).Append("\">\n");
+        // TriStation stores such a program's diagram twice; the marker lets our XML → PT2X
+        // direction reproduce that stream without duplicating the <pou> element (a repeated
+        // definition makes TriStation render every block twice when the file is imported).
+        if (b.StoredTwice) sb.Append("        <!-- ts:diagramCopies=2 -->\n");
 
         if (b.St != null)
         {
             if (b.PouType == "function" && b.ReturnType != null)
                 sb.Append("        <interface><returnType>").Append(TypeInner(b.ReturnType)).Append("</returnType></interface>\n");
-            sb.Append("        <body>\n          <ST><![CDATA[").Append(CData(b.St)).Append("]]></ST>\n        </body>\n");
+            // TriStation's XML export writes ST with LF endings and without the trailing
+            // newline its importer appends again; emit the same so the round-trip is exact.
+            string stText = b.St.Replace("\r\n", "\n");
+            if (stText.EndsWith('\n')) stText = stText[..^1];
+            sb.Append("        <body>\n          <ST><![CDATA[").Append(CData(stText)).Append("]]></ST>\n        </body>\n");
             sb.Append("        <documentation />\n");
             EmitPouExt(sb, b);
             sb.Append("      </pou>\n");
@@ -1386,13 +1568,13 @@ public sealed partial class FromPt2
         EmitFbdBody(sb, b);
         sb.Append("        <documentation />\n");
         EmitPouExt(sb, b);
-            sb.Append("      </pou>\n");
+        sb.Append("      </pou>\n");
     }
 
     private void EmitInterface(StringBuilder sb, Pt2Block b)
     {
         sb.Append("        <interface>\n");
-        var vars = b.Vars.ToList();
+        var vars = b.Vars.Where(v => !v.IsInstance).ToList();
         var consts = b.Sheets
             .SelectMany(s => s.Elems)
             .OfType<Pt2VarElem>()
@@ -1466,7 +1648,12 @@ public sealed partial class FromPt2
     {
         Ln(sb, 8, "<body>");
         Ln(sb, 10, "<FBD>");
-        string sheetsOpen = "<ts:SHEETS Width=\"" + (b.HZoneCount * 20 + 2) + "\" Height=\"" + (b.VZoneCount * 25 + 2) + "\"";
+        // Sheet templates have fixed page sizes (TriStation: C = 202x152, D = 322x202).
+        // The zone counts alone give the wrong width for C (12 zones), so use the named
+        // template when we know it.
+        int sheetW = b.SheetTemplate.Contains("TemplateC", StringComparison.OrdinalIgnoreCase) ? 202
+                   : b.HZoneCount * 20 + 2;
+        string sheetsOpen = "<ts:SHEETS Width=\"" + sheetW + "\" Height=\"" + (b.VZoneCount * 25 + 2) + "\"";
         if (b.SheetTemplate.Length > 0)
             sheetsOpen += " Template=\"" + Esc(b.SheetTemplate) + "\"";
         Ln(sb, 12, sheetsOpen + ">");
@@ -1601,13 +1788,7 @@ public sealed partial class FromPt2
         Ln(sb, 12, "</block>");
     }
 
-    private static string ExportInPinName(string typeName, string name)
-    {
-        if (typeName == "MUX" && name.Length > 2 && name.StartsWith("IN", StringComparison.Ordinal)
-            && int.TryParse(name.Substring(2), out int n))
-            return "IN" + (n + 1).ToString();
-        return name;
-    }
+    private static string ExportInPinName(string typeName, string name) => name;
 
     private void EmitVar(StringBuilder sb, Pt2VarElem v, Pt2Sheet sheet, FbdCtx ctx)
     {
@@ -1961,16 +2142,54 @@ public sealed partial class FromPt2
         return libs;
     }
 
-    /// <summary>Ref writes one self-closing &lt;LIBRARY&gt; per reference at 12sp; the embedded
-    /// OLE LIBRARY_DATA blobs (LibType 2/3) are reproduced only in Stage 4.</summary>
+    /// <summary>One &lt;LIBRARY&gt; per project library reference. TriStation embeds the compiled
+    /// library (a nested compound file holding the library's .EMA/.NCA and its element streams)
+    /// as base64 LIBRARY_DATA; those blobs ship with TriStation, not with the project, so they are
+    /// carried as embedded snapshots and matched by library name.</summary>
     private void EmitLibraryConfiguration(StringBuilder sb)
     {
         var libs = LibraryRefs();
         if (libs.Count == 0) return;
         sb.Append("          <LIBRARY_CONFIGURATION>\n");
         foreach (var l in libs)
-            sb.Append("            <LIBRARY Name=\"").Append(Esc(l)).Append("\" />\n");
+        {
+            if (LibraryData(l) is { Length: > 0 } blob)
+            {
+                sb.Append("            <LIBRARY Name=\"").Append(Esc(l)).Append("\">\n");
+                sb.Append("              <LIBRARY_DATA>").Append(Convert.ToBase64String(blob)).Append("</LIBRARY_DATA>\n");
+                sb.Append("            </LIBRARY>\n");
+            }
+            else
+            {
+                sb.Append("            <LIBRARY Name=\"").Append(Esc(l)).Append("\" />\n");
+            }
+        }
         sb.Append("          </LIBRARY_CONFIGURATION>\n");
+    }
+
+    private static readonly Dictionary<string, byte[]> LibraryDataCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The embedded compiled library for <paramref name="name"/>, or null.</summary>
+    private static byte[]? LibraryData(string name)
+    {
+        lock (LibraryDataCache)
+        {
+            if (LibraryDataCache.TryGetValue(name, out var cached)) return cached.Length == 0 ? null : cached;
+            byte[] result = Array.Empty<byte>();
+            string resource = "Pt2Conv.Resources.lib_" + name + ".ole.gz";
+            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource))
+            {
+                if (stream != null)
+                {
+                    using var gzip = new System.IO.Compression.GZipStream(stream, System.IO.Compression.CompressionMode.Decompress);
+                    using var mem = new MemoryStream();
+                    gzip.CopyTo(mem);
+                    result = mem.ToArray();
+                }
+            }
+            LibraryDataCache[name] = result;
+            return result.Length == 0 ? null : result;
+        }
     }
 
     // ------------------------------------------------------------- controller config
@@ -2127,6 +2346,13 @@ public sealed partial class FromPt2
     private void EmitChassis(StringBuilder sb, XElement? hw)
     {
         if (hw == null) return;
+        var defaults = HwModuleDefaults.Load();
+        var usedPoints = UsedIoPoints();
+        // MEMORYALLOCATION_PARAMETERS values are running offsets: every 32-point module
+        // reserves 32 integer slots, discrete modules additionally reserve 32 slots of their
+        // own class (input or output). The counters run across all chassis in export order.
+        int integers = 0, discretes = 0, outputs = 0;
+
         var chassisCol = hw.Elements("Collection").FirstOrDefault(e => (string?)e.Attribute("Name") == "HwChassis")
                          ?? hw.Descendants("Collection").FirstOrDefault(e => (string?)e.Attribute("Name") == "HwChassis");
         if (chassisCol == null) return;
@@ -2135,7 +2361,7 @@ public sealed partial class FromPt2
             if (!int.TryParse((string?)ch.Attribute("ChassisNum"), out int num) || num == -1) continue;
             string id = (string?)ch.Attribute("ChassisID") ?? "";
             string type = ChassisType((string?)ch.Attribute("Name") ?? "");
-            string desc = ChassisDesc(type);
+            string desc = defaults.ChassisDescription(type) ?? ChassisDesc(type);
             if (num == 0)
                 sb.Append("              <ts:MAIN_CHASSIS Type=\"").Append(Esc(type)).Append("\" Description=\"").Append(Esc(desc)).Append("\">\n");
             else
@@ -2153,21 +2379,193 @@ public sealed partial class FromPt2
                     if (int.TryParse((string?)b.Attribute("SlotID"), out int s) && s >= 0 && (baseSlot < 0 || s < baseSlot))
                         baseSlot = s;
                 if (baseSlot < 0) baseSlot = 0;
+
+                // An expansion chassis with at least one free slot carries a single placeholder
+                // module (library id 96, slot 0) ahead of its real modules.
+                bool hasEmpty = boardList.Any(b => (string?)b.Attribute("ModuleID") == "259");
+                if (num != 0 && hasEmpty)
+                {
+                    sb.Append("                <ts:MODULE ID=\"").Append(defaults.EmptyModuleId).Append("\">\n");
+                    sb.Append("                  <ts:SLOT_ADDRESS>0</ts:SLOT_ADDRESS>\n");
+                    sb.Append("                  <ts:SETUP_PARAMETERS />\n");
+                    sb.Append("                  <ts:MEMORYALLOCATION_PARAMETERS />\n");
+                    sb.Append("                </ts:MODULE>\n");
+                }
+
                 foreach (var b in boardList)
                 {
                     if (!int.TryParse((string?)b.Attribute("SlotID"), out int slot)) continue;
                     if (!int.TryParse((string?)b.Attribute("ModuleID"), out int mid)) continue;
                     if (slot < 0 || mid == 259) continue;
+                    int slotAddress = slot - baseSlot + 1;
+                    var module = defaults.Find(mid);
+
                     sb.Append("                <ts:MODULE ID=\"").Append(mid).Append("\">\n");
-                    sb.Append("                  <ts:SLOT_ADDRESS>").Append(slot - baseSlot + 1).Append("</ts:SLOT_ADDRESS>\n");
-                    sb.Append("                  <ts:SETUP_PARAMETERS />\n");
-                    sb.Append("                  <ts:MEMORYALLOCATION_PARAMETERS />\n");
+                    sb.Append("                  <ts:SLOT_ADDRESS>").Append(slotAddress).Append("</ts:SLOT_ADDRESS>\n");
+                    if (module == null || module.Setup.Count == 0)
+                    {
+                        sb.Append("                  <ts:SETUP_PARAMETERS />\n");
+                    }
+                    else
+                    {
+                        sb.Append("                  <ts:SETUP_PARAMETERS>\n");
+                        usedPoints.TryGetValue((num, slotAddress), out var used);
+                        bool patchPointTypes = module.Setup.Any(a => a.Length == 2 && IsPointType(a[0]) && a[1] == defaults.PointUsedValue);
+                        foreach (var a in module.Setup)
+                        {
+                            if (a.Length != 2) continue;
+                            string value = a[1];
+                            if (patchPointTypes && PointType(a[0], used, defaults, out string pt)) value = pt;
+                            sb.Append("                    <ts:HardwareModuleAttribute Name=\"").Append(Esc(a[0]))
+                              .Append("\" Value=\"").Append(Esc(value)).Append("\" />\n");
+                        }
+                        sb.Append("                  </ts:SETUP_PARAMETERS>\n");
+                    }
+
+                    if (module == null || module.Memory.Count == 0)
+                    {
+                        sb.Append("                  <ts:MEMORYALLOCATION_PARAMETERS />\n");
+                    }
+                    else
+                    {
+                        sb.Append("                  <ts:MEMORYALLOCATION_PARAMETERS>\n");
+                        foreach (var name in module.Memory)
+                        {
+                            int value = name switch
+                            {
+                                "InputDiscretes" => discretes,
+                                "OutputDiscretes" => outputs,
+                                "InputIntegers" => integers,
+                                _ => 0,
+                            };
+                            sb.Append("                    <ts:HardwareModuleAttribute Name=\"").Append(Esc(name))
+                              .Append("\" Value=\"").Append(value.ToString(CultureInfo.InvariantCulture)).Append("\" />\n");
+                        }
+                        sb.Append("                  </ts:MEMORYALLOCATION_PARAMETERS>\n");
+                    }
                     sb.Append("                </ts:MODULE>\n");
+
+                    if (module != null)
+                    {
+                        if (module.Memory.Contains("InputDiscretes")) discretes += defaults.DiscreteSlots;
+                        if (module.Memory.Contains("OutputDiscretes")) outputs += defaults.DiscreteSlots;
+                        if (module.Memory.Contains("InputIntegers")) integers += defaults.IntegerSlots;
+                    }
                 }
             }
             sb.Append(num == 0 ? "              </ts:MAIN_CHASSIS>\n" : "              </ts:EXP_CHASSIS>\n");
         }
     }
+
+    /// <summary>
+    /// Point type of a discrete module: TriStation's export marks the points that carry a tag
+    /// as "Not-Used" in the module setup and leaves the rest at the library default
+    /// ("Non-Supervised"). Verified against every 3626X output board in the reference project.
+    /// </summary>
+    private static bool PointType(string attribute, HashSet<int>? used, HwModuleDefaults defaults, out string value)
+    {
+        value = "";
+        if (used == null || !IsPointType(attribute)) return false;
+        int dot = attribute.IndexOf('.');
+        if (!int.TryParse(attribute.AsSpan(5, dot - 5), NumberStyles.Integer, CultureInfo.InvariantCulture, out int point))
+            return false;
+        value = used.Contains(point) ? defaults.PointUsedValue : defaults.PointUnusedValue;
+        return true;
+    }
+
+    private static bool IsPointType(string attribute) =>
+        attribute.StartsWith("Point", StringComparison.Ordinal) && attribute.EndsWith(".Type", StringComparison.Ordinal);
+
+    /// <summary>I/O points that carry a tag, keyed by (chassis number, 1-based slot).</summary>
+    private Dictionary<(int Chassis, int Slot), HashSet<int>> UsedIoPoints()
+    {
+        var map = new Dictionary<(int, int), HashSet<int>>();
+        if (!_streams.TryGetValue("Current/Tagnames/Tagnames.csv", out var data)) return map;
+        string[] lines = Encoding.UTF8.GetString(data).Replace("\r\n", "\n").Split('\n');
+        if (lines.Length < 2) return map;
+        var header = CsvFields(lines[1]);
+        var col = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int h = 0; h < header.Length; h++) col[header[h]] = h;
+        if (!col.TryGetValue("Address", out int addrCol) && !col.TryGetValue("PhysicalAddress", out addrCol)) return map;
+        for (int i = 2; i < lines.Length; i++)
+        {
+            var f = CsvFields(lines[i]);
+            if (addrCol >= f.Length) continue;
+            var m = System.Text.RegularExpressions.Regex.Match(f[addrCol], @"^(\d{2})\.(\d{2})\.(\d{2})$");
+            if (!m.Success) continue;
+            var key = (int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture),
+                       int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture));
+            if (!map.TryGetValue(key, out var set)) map[key] = set = new HashSet<int>();
+            set.Add(int.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture));
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// TriStation's module-library descriptors (SETUP_PARAMETERS defaults per module id), loaded
+    /// from the embedded export snapshot. They are not part of the .pt2x, so without this the
+    /// decompiled XML can only emit empty parameter blocks.
+    /// </summary>
+    private sealed class HwModuleDefaults
+    {
+        public int IntegerSlots { get; set; } = 32;
+        public int DiscreteSlots { get; set; } = 32;
+        public int EmptyModuleId { get; set; } = 96;
+        public string PointUsedValue { get; set; } = "Not-Used";
+        public string PointUnusedValue { get; set; } = "Non-Supervised";
+        public Dictionary<string, string> ChassisDescriptions { get; set; } = new();
+        public Dictionary<string, HwModuleDefault> Modules { get; set; } = new();
+
+        public string? ChassisDescription(string type) =>
+            ChassisDescriptions.TryGetValue(type, out var d) ? d : null;
+
+        public HwModuleDefault? Find(int id) =>
+            Modules.TryGetValue(id.ToString(CultureInfo.InvariantCulture), out var m) ? m : null;
+
+        private static HwModuleDefaults? _cached;
+
+        public static HwModuleDefaults Load()
+        {
+            if (_cached != null) return _cached;
+            const string name = "Pt2Conv.Resources.hw_module_defaults.json";
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            HwModuleDefaults? defaults = null;
+            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+            {
+                if (stream != null)
+                {
+                    using var reader = new StreamReader(stream);
+                    defaults = JsonSerializer.Deserialize<HwModuleDefaults>(reader.ReadToEnd(), options);
+                }
+            }
+            defaults ??= new HwModuleDefaults();
+            // Optional external catalogue: a hw_module_defaults.json next to the executable (or in
+            // the working directory) adds/overrides module types without rebuilding the tool.
+            foreach (var dir in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+            {
+                string path = Path.Combine(dir ?? "", "hw_module_defaults.json");
+                if (dir == null || !File.Exists(path)) continue;
+                try
+                {
+                    var extra = JsonSerializer.Deserialize<HwModuleDefaults>(File.ReadAllText(path), options);
+                    if (extra == null) continue;
+                    foreach (var (id, mod) in extra.Modules) defaults.Modules[id] = mod;
+                    foreach (var (type, desc) in extra.ChassisDescriptions) defaults.ChassisDescriptions[type] = desc;
+                    Console.WriteLine($"  hw defaults: merged {extra.Modules.Count} module(s) from {path}");
+                }
+                catch { /* keep the embedded catalogue */ }
+                break;
+            }
+            return _cached = defaults;
+        }
+    }
+
+    private sealed class HwModuleDefault
+    {
+        public List<string[]> Setup { get; set; } = new();
+        public List<string> Memory { get; set; } = new();
+    }
+
 
     private static string ChassisType(string name)
     {
@@ -2220,15 +2618,19 @@ public sealed partial class FromPt2
             ? new SortedSet<string>(blocks.SelectMany(b => b.ReferencedGlobals), StringComparer.OrdinalIgnoreCase)
             : new SortedSet<string>(_tags.Select(t => t.Name), StringComparer.OrdinalIgnoreCase);
 
-        // Ref splits the tag table at configuration level into two globalVars by Tagnames.csv
-        // Location: "1" (memory points) -> nonpersistent, "2"/"3" (I/O) -> persistent (622/399 here).
+        // Ref splits the tag table at configuration level into three globalVars blocks: retentive
+        // tags (retain), then memory points (Location "1") and I/O points (Location "2"/"3").
         var resolved = names
             .Select(n => (Name: n, Tag: _tags.FirstOrDefault(t => t.Name.Equals(n, StringComparison.OrdinalIgnoreCase))))
             .ToList();
+        static bool Yes(string? v) => string.Equals(v, "True", StringComparison.OrdinalIgnoreCase) || v == "1";
+        var retained = resolved.Where(x => Yes(x.Tag?.Retentive)).ToList();
+        var rest = resolved.Where(x => !Yes(x.Tag?.Retentive)).ToList();
         EmitInstanceGlobals(sb, "nonretain=\"true\" nonpersistent=\"true\"",
-            resolved.Where(x => (x.Tag?.Location ?? "1") == "1").ToList());
+            rest.Where(x => (x.Tag?.Location ?? "1") == "1").ToList());
         EmitInstanceGlobals(sb, "nonretain=\"true\" persistent=\"true\"",
-            resolved.Where(x => (x.Tag?.Location ?? "1") != "1").ToList());
+            rest.Where(x => (x.Tag?.Location ?? "1") != "1").ToList());
+        EmitInstanceGlobals(sb, "retain=\"true\" nonpersistent=\"true\"", retained);
 
         sb.Append("      </configuration>\n");
         EmitController(sb);
@@ -2279,14 +2681,26 @@ public sealed partial class FromPt2
           .Append("\" SharedForRead=\"").Append(YesNo(t.SharedRead))
           .Append("\" EnableMultipleWrite=\"").Append(YesNo(t.EnableMultipleWrites))
           .Append("\" />\n");
+        // BOOL points carry a trip alarm; the analog point kinds (DINT/REAL) carry the
+        // three analog alarm blocks instead. The flags themselves are all "No" in the
+        // reference export (the alarms are configured per point only when enabled).
+        if (t.Type.Equals("BOOL", StringComparison.OrdinalIgnoreCase))
+            sb.Append("              <ts:TRIP_ALARMS TRIPAlarmEnabled=\"No\" />\n");
+        else
+        {
+            sb.Append("              <ts:LEVEL_ALARMS LevelAlarmEnabled=\"No\" />\n");
+            sb.Append("              <ts:DEVIATION_ALARMS DevAlarmEnabled=\"No\" />\n");
+            sb.Append("              <ts:RATEOFCHANGE_ALARMS ROCAlarmEnabled=\"No\" />\n");
+        }
         sb.Append("              <ts:POINT_ASSIGNMENT TagClass=\"").Append(ClassOf(t.Class))
           .Append("\" PointType=\"").Append(PointTypeOf(t.Location))
           .Append("\" AliasCategory=\"").Append(AliasCategoryOf(t.AliasNumberSelection))
-          .Append("\" AliasType=\"").Append(t.AliasType == "1" ? "UNALIASED" : "ALIASED")
+          .Append("\" AliasType=\"").Append(AliasTypeOf(t.AliasType))
           .Append("\" AliasNumber=\"").Append(Esc(t.UserAliasLegacy))
           .Append("\" PhysicalAddress=\"").Append(Esc(pa))
           .Append("\" AliasNumberExt=\"").Append(Esc(t.UserAliasExtended))
-          .Append("\" BinNumber=\"0\" BinOffset=\"0\" />\n");
+          .Append("\" BinNumber=\"").Append(Esc(t.Bin))
+          .Append("\" BinOffset=\"").Append(Esc(t.BinOffset)).Append("\" />\n");
         sb.Append("              <ts:TAG_SCALING MinSpan=\"").Append(Num(t.MinimumValue))
           .Append("\" MaxSpan=\"").Append(Num(t.MaximumValue))
           .Append("\" DisplayPrecision=\"").Append(Num(t.Precision))
@@ -2328,10 +2742,6 @@ public sealed partial class FromPt2
           .Append("\" MonDeviceHealth=\"").Append(LcBool(t.HART_MonitorDeviceHealth))
           .Append("\" LockConfig=\"").Append(LcBool(t.HART_LockConfiguration))
           .Append("\" />\n");
-        sb.Append("                <ts:PI_PARAMS PIPointType=\"").Append(Num(t.PI_PointType))
-          .Append("\" GearTeeth=\"").Append(Num(t.PI_PointGearTeeth))
-          .Append("\" GearRatio=\"").Append(Num(t.PI_PointGearRatio))
-          .Append("\" />\n");
         sb.Append("              </ts:IO_MODULE_PARAMS>\n");
         sb.Append("            </ts:TAGNAME>\n");
     }
@@ -2352,7 +2762,20 @@ public sealed partial class FromPt2
     private static string PointTypeOf(string location) =>
         location.Trim() switch { "2" => "INPUT", "3" => "OUTPUT", _ => "MEMORY" };
 
-    private static string AliasCategoryOf(string sel) => sel.Trim() == "0" ? "NO_ALIAS" : "DEFAULT_ALIAS";
+    private static string AliasCategoryOf(string sel) => sel.Trim() switch
+    {
+        "0" => "NO_ALIAS",
+        "2" => "USER_ALIAS",
+        _ => "DEFAULT_ALIAS",
+    };
+
+    private static string AliasTypeOf(string type) => type.Trim() switch
+    {
+        "2" => "READ_ALIASED",
+        "3" => "READWRITE_ALIASED",
+        "1" => "UNALIASED",
+        _ => "UNALIASED",
+    };
 
     private static string ColorOf(string csv) =>
         csv.Trim() switch { "255" => "RED", "65280" => "GREEN", "16711680" => "BLUE", _ => csv };
@@ -2566,50 +2989,6 @@ public sealed partial class FromPt2
     private static void Ln(StringBuilder sb, int indent, string text) =>
         sb.Append(' ', indent).Append(text).Append('\n');
 
-    /// <summary>Converts structural newlines to CRLF (TriStation's line ending) while leaving
-    /// verbatim CDATA bodies and the contentHeader &lt;Comment&gt; text untouched (those keep
-    /// the raw LF that TriStation writes inside element content).</summary>
-    private static string ToCrlf(string xml)
-    {
-        var sb = new StringBuilder(xml.Length + xml.Length / 16);
-        int i = 0, n = xml.Length;
-        while (i < n)
-        {
-            int cdata = xml.IndexOf("<![CDATA[", i, StringComparison.Ordinal);
-            int comment = xml.IndexOf("<Comment>", i, StringComparison.Ordinal);
-            int next;
-            if (cdata < 0) next = comment;
-            else if (comment < 0) next = cdata;
-            else next = Math.Min(cdata, comment);
-            if (next < 0) { AppendCrlf(sb, xml.Substring(i)); break; }
-
-            AppendCrlf(sb, xml.Substring(i, next - i));
-            int end;
-            if (next == cdata)
-            {
-                end = xml.IndexOf("]]>", next, StringComparison.Ordinal);
-                end = end < 0 ? n : end + 3;
-            }
-            else
-            {
-                end = xml.IndexOf("</Comment>", next, StringComparison.Ordinal);
-                end = end < 0 ? n : end + 10;
-            }
-            sb.Append(xml, next, end - next);
-            i = end;
-        }
-        return sb.ToString();
-    }
-
-    private static void AppendCrlf(StringBuilder sb, string s)
-    {
-        int start = 0;
-        for (int k = 0; k < s.Length; k++)
-        {
-            if (s[k] == '\n') { sb.Append(s, start, k - start).Append("\r\n"); start = k + 1; }
-        }
-        sb.Append(s, start, s.Length - start);
-    }
 
     // ---------------------------------------------------------------- model
 
@@ -2622,6 +3001,9 @@ public sealed partial class FromPt2
         public string Desc = "";
         public string Address = "";
         public string PhysicalAddress = "";
+        /// <summary>TriStation point bin/offset derived from the address + HwConfiguration.</summary>
+        public string Bin = "0";
+        public string BinOffset = "0";
         public string Group1 = "";
         public string Group2 = "";
         public string InitialValue = "";
@@ -2696,6 +3078,9 @@ public sealed partial class FromPt2
         public string ApprovedName = "";
         public string ApprovedTime = "";
         public string DateTime = "";
+        /// <summary>True when the container stored the diagram twice (primary + snapshot
+        /// copy) for a program. Function blocks always are.</summary>
+        public bool StoredTwice;
         public int ExtOptFlags = 3;
         public int CemEventInputs = 0;
         public int CemActionOutputs = 0;

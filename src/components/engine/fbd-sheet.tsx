@@ -46,6 +46,8 @@ export interface InspectBlockElem extends InspectElemBase {
   typeName: string;
   instance: string;
   isFunction: boolean;
+  /** The container's doubleSpace flag: pins sit two rows (40 units) apart. */
+  doubleSpace?: boolean;
   inputs: InspectPin[];
   outputs: string[];
 }
@@ -54,6 +56,8 @@ export interface InspectVarElem extends InspectElemBase {
   kind: "var";
   name: string;
   varType: string;
+  /** The container's varType="CONSTANT" flag. */
+  isConstant?: boolean;
   annotation: string;
   annotate: boolean;
   inWire: number;
@@ -185,7 +189,29 @@ function blockBodyTop(elem: InspectBlockElem): number {
 }
 
 function blockPinY(elem: InspectBlockElem, index: number): number {
-  return blockBodyTop(elem) + BLOCK_PIN_ROW + index * BLOCK_PIN_STEP;
+  // Double-space blocks (the timer family) lay their pins out two rows apart.
+  const step = elem.doubleSpace ? BLOCK_PIN_STEP * 2 : BLOCK_PIN_STEP;
+  return blockBodyTop(elem) + BLOCK_PIN_ROW + index * step;
+}
+
+function blockBodyHeight(elem: InspectBlockElem): number {
+  const fn = elem.isFunction || !elem.instance;
+  const stored = fn ? elem.h : Math.max(12, elem.h - BLOCK_STRIP_H - BLOCK_GAP);
+  const step = elem.doubleSpace ? BLOCK_PIN_STEP * 2 : BLOCK_PIN_STEP;
+  const pinCount = Math.max(elem.inputs.length, elem.outputs.length);
+
+  // Keep the container's stored height while it contains every pin; otherwise
+  // grow from the same header/pin geometry used to place the pins.
+  if (pinCount > 0) {
+    const lastInput = elem.inputs.length > 0 ? BLOCK_PIN_ROW + (elem.inputs.length - 1) * step : 0;
+    const lastOutput =
+      elem.outputs.length > 0
+        ? BLOCK_PIN_ROW + (elem.outputs.length - 1) * step + (BLOCK_OUT_NAME - BLOCK_PIN_ROW)
+        : 0;
+    const needed = Math.max(lastInput, lastOutput);
+    if (stored < needed) return BLOCK_PIN_ROW + pinCount * step;
+  }
+  return stored;
 }
 
 // A variable is drawn as a narrow box that carries the name and an area below it
@@ -281,7 +307,7 @@ function CommentBox({ elem, front }: { elem: InspectCommentElem; front: boolean 
 function BlockShape({ elem }: { elem: InspectBlockElem }) {
   const fn = elem.isFunction || !elem.instance;
   const bodyTop = blockBodyTop(elem);
-  const bodyH = fn ? elem.h : Math.max(12, elem.h - BLOCK_STRIP_H - BLOCK_GAP);
+  const bodyH = blockBodyHeight(elem);
   return (
     <g>
       {!fn ? (
@@ -354,20 +380,67 @@ function BlockShape({ elem }: { elem: InspectBlockElem }) {
 }
 
 function TerminalShape({ elem }: { elem: InspectVarElem }) {
+  const isConstant = elem.isConstant ?? elem.varType === "CONSTANT";
+  if (isConstant) {
+    const cy = elem.y + elem.h / 2;
+    const stub = elem.h / 2;
+    return (
+      <g>
+        <rect x={elem.x} y={elem.y} width={elem.w} height={elem.h} fill="#ffffff" stroke={INK} strokeWidth={1.6} />
+        <text
+          x={elem.x + elem.w / 2}
+          y={cy + 5.7}
+          textAnchor="middle"
+          fontSize={13}
+          fill={INK}
+          fontFamily="Arial, Helvetica, sans-serif"
+        >
+          {elem.name}
+        </text>
+        {elem.inWire > 0 ? (
+          <line x1={elem.x - stub} y1={cy} x2={elem.x} y2={cy} stroke={INK} strokeWidth={1.6} />
+        ) : null}
+        {elem.outWire > 0 ? (
+          <line x1={elem.x + elem.w} y1={cy} x2={elem.x + elem.w + stub} y2={cy} stroke={INK} strokeWidth={1.6} />
+        ) : null}
+      </g>
+    );
+  }
+
   const tall = elem.h >= 2 * TERMINAL_NAME_H;
-  const nx = tall ? elem.x + TERMINAL_NAME_INSET : elem.x;
-  const nw = tall ? elem.w - 2 * TERMINAL_NAME_INSET : elem.w;
   const nh = tall ? TERMINAL_NAME_H : elem.h;
-  const pinY = elem.y + nh / 2;
+  const capR = nh / 2;
+  // The stored width already includes the two end caps. Inset the white body by
+  // the cap radius so the pill spans exactly the element's own bounds.
+  const nx = tall ? elem.x + TERMINAL_NAME_INSET : elem.x + capR;
+  const nw = tall ? elem.w - 2 * TERMINAL_NAME_INSET : Math.max(1, elem.w - 2 * capR);
+  // TriStation draws every tag kind (local, input, output, memory) as a pill:
+  // a white body closed by a black half-disc at each end. The pin (and the
+  // wire) sits on the centre line.
+  const pinY = elem.y + capR;
   const annY = tall ? elem.y + TERMINAL_NAME_H : elem.y + elem.h;
   const annH = tall ? elem.h - TERMINAL_NAME_H : 80;
   const annLines = (elem.annotation ?? "").split("\n");
   return (
     <g>
-      <rect x={nx} y={elem.y} width={nw} height={nh} fill="#ffffff" stroke={INK} strokeWidth={1.6} />
+      <path
+        d={`M ${nx} ${pinY - capR} A ${capR} ${capR} 0 0 0 ${nx} ${pinY + capR}`}
+        fill="none"
+        stroke={INK}
+        strokeWidth={1.6}
+      />
+      <path
+        d={`M ${nx + nw} ${pinY - capR} A ${capR} ${capR} 0 0 1 ${nx + nw} ${pinY + capR}`}
+        fill="none"
+        stroke={INK}
+        strokeWidth={1.6}
+      />
+      <rect x={nx} y={elem.y} width={nw} height={nh} fill="#ffffff" stroke="none" />
+      <line x1={nx} y1={elem.y} x2={nx + nw} y2={elem.y} stroke={INK} strokeWidth={1.6} />
+      <line x1={nx} y1={elem.y + nh} x2={nx + nw} y2={elem.y + nh} stroke={INK} strokeWidth={1.6} />
       <text
         x={nx + nw / 2}
-        y={elem.y + nh / 2 + 5.7}
+        y={pinY + 5.7}
         textAnchor="middle"
         fontSize={13}
         fill={INK}
@@ -376,26 +449,46 @@ function TerminalShape({ elem }: { elem: InspectVarElem }) {
         {elem.name}
       </text>
       {elem.inWire > 0 ? (
-        <rect
-          x={elem.x - TERMINAL_PIN_GAP + 0.4}
-          y={pinY - 2.55}
-          width={4.6}
-          height={5.1}
-          fill="#ffffff"
-          stroke={INK}
-          strokeWidth={1.6}
-        />
+        <g>
+          <line
+            x1={elem.x}
+            y1={pinY}
+            x2={elem.x - TERMINAL_PIN_GAP + 0.4 + 4.6}
+            y2={pinY}
+            stroke={WIRE}
+            strokeWidth={1.6}
+          />
+          <rect
+            x={elem.x - TERMINAL_PIN_GAP + 0.4}
+            y={pinY - 2.55}
+            width={4.6}
+            height={5.1}
+            fill={INK}
+            stroke={INK}
+            strokeWidth={1.6}
+          />
+        </g>
       ) : null}
       {elem.outWire > 0 ? (
-        <rect
-          x={elem.x + elem.w + TERMINAL_PIN_GAP - 5}
-          y={pinY - 2.55}
-          width={4.6}
-          height={5.1}
-          fill="#ffffff"
-          stroke={INK}
-          strokeWidth={1.6}
-        />
+        <g>
+          <line
+            x1={elem.x + elem.w}
+            y1={pinY}
+            x2={elem.x + elem.w + TERMINAL_PIN_GAP - 5}
+            y2={pinY}
+            stroke={WIRE}
+            strokeWidth={1.6}
+          />
+          <rect
+            x={elem.x + elem.w + TERMINAL_PIN_GAP - 5}
+            y={pinY - 2.55}
+            width={4.6}
+            height={5.1}
+            fill={INK}
+            stroke={INK}
+            strokeWidth={1.6}
+          />
+        </g>
       ) : null}
       {elem.annotate ? (
         <>
